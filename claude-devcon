@@ -63,6 +63,7 @@ cmd_launch() {
     exec docker exec -it \
       --user "$(id -u):$(id -g)" \
       -e HOME=/home/devcon \
+      -e CLAUDE_CONFIG_DIR=/home/devcon/.claude \
       -e "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}" \
       "$name" claude --dangerously-skip-permissions
   fi
@@ -99,6 +100,7 @@ cmd_launch() {
     --label "claude-devcon.worktree=${cwd}" \
     --user "$(id -u):$(id -g)" \
     -e HOME=/home/devcon \
+    -e CLAUDE_CONFIG_DIR=/home/devcon/.claude \
     -e "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}" \
     "${mount_args[@]}" \
     "${gitconfig_args[@]}" \
@@ -109,6 +111,7 @@ cmd_launch() {
   exec docker exec -it \
     --user "$(id -u):$(id -g)" \
     -e HOME=/home/devcon \
+    -e CLAUDE_CONFIG_DIR=/home/devcon/.claude \
     -e "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}" \
     "$name" claude --dangerously-skip-permissions
 }
