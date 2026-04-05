@@ -23,7 +23,7 @@ check_as_user() {
   local desc="$1"; shift
   if docker run --rm \
       --user "$(id -u):$(id -g)" \
-      -e HOME=/home/devcon \
+      -e HOME=/home/pen \
       "$IMAGE" "$@" > /dev/null 2>&1; then
     printf 'PASS  %s\n' "$desc"
     ((PASS++)) || true

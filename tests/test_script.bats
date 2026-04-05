@@ -10,7 +10,7 @@ setup() {
   HARNESS=claude
   HARNESS_IMAGE="pen-claude:latest"
   HARNESS_CONFIG="${HOME}/.pen/claude"
-  HARNESS_CONTAINER_CONFIG="/home/devcon/.claude"
+  HARNESS_CONTAINER_CONFIG="/home/pen/.claude"
 }
 
 teardown() {
@@ -19,7 +19,7 @@ teardown() {
 
 @test "container_name: returns pen_ prefix plus sanitized basename" {
   local tmpdir
-  tmpdir=$(mktemp -d /tmp/devcon_test_XXXXX)
+  tmpdir=$(mktemp -d /tmp/pen_test_XXXXX)
   cd "$tmpdir"
   run container_name
   [ "$status" -eq 0 ]
@@ -31,7 +31,7 @@ teardown() {
 
 @test "container_name: output contains only docker-safe characters" {
   local tmpdir
-  tmpdir=$(mktemp -d /tmp/devcon_test_XXXXX)
+  tmpdir=$(mktemp -d /tmp/pen_test_XXXXX)
   cd "$tmpdir"
   run container_name
   [ "$status" -eq 0 ]
@@ -42,7 +42,7 @@ teardown() {
 
 @test "container_name: output does not start with a hyphen" {
   local tmpdir
-  tmpdir=$(mktemp -d /tmp/devcon_test_XXXXX)
+  tmpdir=$(mktemp -d /tmp/pen_test_XXXXX)
   cd "$tmpdir"
   run container_name
   [ "$status" -eq 0 ]
@@ -53,7 +53,7 @@ teardown() {
 
 @test "container_name: output does not end with a hyphen" {
   local tmpdir
-  tmpdir=$(mktemp -d /tmp/devcon_test_XXXXX)
+  tmpdir=$(mktemp -d /tmp/pen_test_XXXXX)
   cd "$tmpdir"
   run container_name
   [ "$status" -eq 0 ]
@@ -64,13 +64,13 @@ teardown() {
 
 @test "container_name: worktree-style name preserves underscore separator" {
   local tmpdir
-  tmpdir=$(mktemp -d /tmp/devcon_test_XXXXX)
-  local wtdir="${tmpdir}/devcon_auth-refactor"
+  tmpdir=$(mktemp -d /tmp/pen_test_XXXXX)
+  local wtdir="${tmpdir}/myproject_auth-refactor"
   mkdir -p "$wtdir"
   cd "$wtdir"
   run container_name
   [ "$status" -eq 0 ]
-  [ "$output" = "pen_devcon_auth-refactor" ]
+  [ "$output" = "pen_myproject_auth-refactor" ]
   cd /tmp
   rm -rf "$tmpdir"
 }
@@ -275,7 +275,7 @@ EOF
   HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/claude" run cmd_launch
   local run_args
   run_args=$(cat "${MOCK_BIN}/.docker_run_log" 2>/dev/null)
-  [[ "$run_args" == *"${fake_home}/.claude/CLAUDE.md:/home/devcon/.claude/CLAUDE.md:ro"* ]]
+  [[ "$run_args" == *"${fake_home}/.claude/CLAUDE.md:/home/pen/.claude/CLAUDE.md:ro"* ]]
   rm -rf "$fake_home"
 }
 
@@ -287,7 +287,7 @@ EOF
   HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/claude" run cmd_launch
   local run_args
   run_args=$(cat "${MOCK_BIN}/.docker_run_log" 2>/dev/null)
-  [[ "$run_args" == *"${fake_home}/.claude/commands:/home/devcon/.claude/commands:ro"* ]]
+  [[ "$run_args" == *"${fake_home}/.claude/commands:/home/pen/.claude/commands:ro"* ]]
   rm -rf "$fake_home"
 }
 
@@ -508,7 +508,7 @@ EOF
   HARNESS=claude HOME="$fake_home" configure_harness
   [ "$HARNESS_IMAGE" = "pen-claude:latest" ]
   [ "$HARNESS_CONFIG" = "${fake_home}/.pen/claude" ]
-  [ "$HARNESS_CONTAINER_CONFIG" = "/home/devcon/.claude" ]
+  [ "$HARNESS_CONTAINER_CONFIG" = "/home/pen/.claude" ]
   rm -rf "$fake_home"
 }
 
@@ -546,7 +546,7 @@ EOF
 # ---------------------------------------------------------------------------
 
 @test "container_name: output is prefixed with pen_" {
-  local tmpdir; tmpdir=$(mktemp -d /tmp/devcon_test_XXXXX)
+  local tmpdir; tmpdir=$(mktemp -d /tmp/pen_test_XXXXX)
   cd "$tmpdir"
   run container_name
   [ "$status" -eq 0 ]

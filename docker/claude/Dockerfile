@@ -24,13 +24,13 @@ RUN ARCH=$(dpkg --print-architecture) && \
     curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${ARCH}.tar.gz" \
       | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:${PATH}"
-ENV GOPATH="/home/devcon/go"
+ENV GOPATH="/home/pen/go"
 ENV PATH="${GOPATH}/bin:${PATH}"
 
 # Claude Code CLI
 RUN npm install -g @anthropic-ai/claude-code
 
 # World-writable home dir for non-root users (host UID passed via --user at runtime)
-RUN mkdir -p /home/devcon && chmod 777 /home/devcon
+RUN mkdir -p /home/pen && chmod 777 /home/pen
 
 WORKDIR /workspace

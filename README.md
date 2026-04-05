@@ -76,7 +76,7 @@ Works with both the main worktree and linked worktrees. For linked worktrees, th
 
 ## Configuration
 
-`~/.pen/claude/` is the pen-managed Claude config dir, mounted as `/home/devcon/.claude` in every container. It holds:
+`~/.pen/claude/` is the pen-managed Claude config dir, mounted as `/home/pen/.claude` in every container. It holds:
 
 | Path | Origin | Notes |
 |---|---|---|
