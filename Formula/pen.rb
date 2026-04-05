@@ -6,6 +6,7 @@ class Pen < Formula
   license "MIT"
 
   def install
+    inreplace "pen", "%%VERSION%%", version.to_s
     bin.install "pen"
     bash_completion.install "completions/pen.bash"
     zsh_completion.install "completions/_pen"

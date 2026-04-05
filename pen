@@ -7,12 +7,17 @@
 #   pen [--harness=<name>] stop [container]     stop and remove a container
 #   pen [--harness=<name>] list [--names-only]  list all pen containers
 #   pen [--harness=<name>] sync-settings [--yes]  sync host settings into pen config (claude only)
+#   pen -- <args>                               pass args directly to harness (bypass pen flag parsing)
+#   pen --help | -h                             show this help text
+#   pen --version | -V                          show pen version
 #
 # Harness selection (highest to lowest priority):
 #   --harness=<name>           CLI flag
 #   .pen.toml (git root)       harness = "name"
 #   ~/.pen/config.toml         harness = "name"
 #   default: claude
+
+PEN_VERSION="%%VERSION%%"
 
 # ---------------------------------------------------------------------------
 # TOML parsing (simple key = "value" only — no sections)
@@ -385,20 +390,45 @@ cmd_list() {
     --format "table {{.Names}}\t{{.Label \"pen.harness\"}}\t{{.Label \"pen.worktree\"}}\t{{.Status}}"
 }
 
+cmd_help() {
+  sed -n '2,/^PEN_VERSION/s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"
+}
+
+cmd_version() {
+  local v="$PEN_VERSION"
+  if [[ "$v" == "%%VERSION%%" ]]; then
+    v=$(git describe --tags --abbrev=0 2>/dev/null || echo "unknown")
+  fi
+  echo "pen $v"
+}
+
 # Allow sourcing for unit tests without executing main logic
 [[ "${BASH_SOURCE[0]}" != "${0}" ]] && return 0
 
 set -euo pipefail
 
 # Parse --harness flag; strip it from passthrough args
+# '--' stops pen flag parsing; all subsequent args go directly to harness
 CLI_HARNESS=""
 passthrough_args=()
+passthrough_only=false
 for arg in "$@"; do
+  if $passthrough_only; then
+    passthrough_args+=("$arg")
+    continue
+  fi
   case "$arg" in
     --harness=*) CLI_HARNESS="${arg#--harness=}" ;;
-    *) passthrough_args+=("$arg") ;;
+    --)          passthrough_only=true ;;
+    *)           passthrough_args+=("$arg") ;;
   esac
 done
+
+case "${passthrough_args[0]:-}" in
+  --help|-h)     cmd_help; exit 0 ;;
+  --version|-V)  cmd_version; exit 0 ;;
+  *) ;;
+esac
 
 HARNESS=$(resolve_harness)
 configure_harness

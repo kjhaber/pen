@@ -542,6 +542,68 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# cmd_help
+# ---------------------------------------------------------------------------
+
+@test "cmd_help: exits with status 0" {
+  run cmd_help
+  [ "$status" -eq 0 ]
+}
+
+@test "cmd_help: output contains Usage:" {
+  run cmd_help
+  [[ "$output" == *"Usage:"* ]]
+}
+
+@test "cmd_help: output mentions pen" {
+  run cmd_help
+  [[ "$output" == *"pen"* ]]
+}
+
+@test "cmd_help: documents -- passthrough" {
+  run cmd_help
+  [[ "$output" == *"--"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# cmd_version
+# ---------------------------------------------------------------------------
+
+@test "cmd_version: outputs 'pen' prefix" {
+  PEN_VERSION="v9.9.9" run cmd_version
+  [ "$status" -eq 0 ]
+  [[ "$output" == pen* ]]
+}
+
+@test "cmd_version: includes PEN_VERSION when it is a real version string" {
+  PEN_VERSION="v1.2.3" run cmd_version
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"v1.2.3"* ]]
+}
+
+@test "cmd_version: falls back to git describe when PEN_VERSION is placeholder" {
+  cat > "${MOCK_BIN}/git" << 'EOF'
+#!/usr/bin/env bash
+echo "v0.5.0"
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  PEN_VERSION="%%VERSION%%" run cmd_version
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"v0.5.0"* ]]
+}
+
+@test "cmd_version: outputs 'unknown' when placeholder and git fails" {
+  cat > "${MOCK_BIN}/git" << 'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  PEN_VERSION="%%VERSION%%" run cmd_version
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"unknown"* ]]
+}
+
+# ---------------------------------------------------------------------------
 # container_name: pen_ prefix
 # ---------------------------------------------------------------------------
 
