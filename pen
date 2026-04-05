@@ -60,7 +60,7 @@ configure_harness() {
     claude)
       HARNESS_IMAGE="${PEN_IMAGE:-pen-claude:latest}"
       HARNESS_CONFIG="${HOME}/.pen/claude"
-      HARNESS_CONTAINER_CONFIG="/home/devcon/.claude"
+      HARNESS_CONTAINER_CONFIG="/home/pen/.claude"
       ;;
     cursor|opencode)
       echo "error: ${HARNESS} harness is not yet implemented" >&2
@@ -77,25 +77,27 @@ configure_harness() {
 # Harness-specific helpers
 # ---------------------------------------------------------------------------
 
-# Echoes "-e KEY=VAL" pairs for docker run/exec
+# Prints one docker flag argument per line for docker run/exec env vars
 harness_env_args() {
   case "$HARNESS" in
     claude)
-      echo "-e" "CLAUDE_CONFIG_DIR=${HARNESS_CONTAINER_CONFIG}"
-      echo "-e" "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}"
+      printf '%s\n' "-e" "CLAUDE_CONFIG_DIR=${HARNESS_CONTAINER_CONFIG}"
+      printf '%s\n' "-e" "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}"
       ;;
   esac
 }
 
-# Echoes "-v src:dst:ro" pairs for live read-only mounts
+# Prints one docker flag argument per line for live read-only mounts
 harness_live_mount_args() {
   case "$HARNESS" in
     claude)
       local src="${HOME}/.claude"
-      [[ -f "${src}/CLAUDE.md" ]] \
-        && echo "-v" "${src}/CLAUDE.md:${HARNESS_CONTAINER_CONFIG}/CLAUDE.md:ro"
-      [[ -d "${src}/commands" ]] \
-        && echo "-v" "${src}/commands:${HARNESS_CONTAINER_CONFIG}/commands:ro"
+      if [[ -f "${src}/CLAUDE.md" ]]; then
+        printf '%s\n' "-v" "${src}/CLAUDE.md:${HARNESS_CONTAINER_CONFIG}/CLAUDE.md:ro"
+      fi
+      if [[ -d "${src}/commands" ]]; then
+        printf '%s\n' "-v" "${src}/commands:${HARNESS_CONTAINER_CONFIG}/commands:ro"
+      fi
       ;;
   esac
 }
@@ -187,7 +189,7 @@ cmd_launch() {
     # shellcheck disable=SC2046
     exec docker exec -it \
       --user "$(id -u):$(id -g)" \
-      -e HOME=/home/devcon \
+      -e HOME=/home/pen \
       "${env_args[@]}" \
       "$name" $(harness_exec_cmd "$@")
   fi
@@ -217,7 +219,7 @@ cmd_launch() {
 
   # Mount .gitconfig read-only so git identity works inside the container
   local gitconfig_args=()
-  [[ -f "${HOME}/.gitconfig" ]] && gitconfig_args=("-v" "${HOME}/.gitconfig:/home/devcon/.gitconfig:ro")
+  [[ -f "${HOME}/.gitconfig" ]] && gitconfig_args=("-v" "${HOME}/.gitconfig:/home/pen/.gitconfig:ro")
 
   # Collect env args for docker run
   local env_args=()
@@ -232,7 +234,7 @@ cmd_launch() {
     --label "pen.harness=${HARNESS}" \
     --label "pen.worktree=${cwd}" \
     --user "$(id -u):$(id -g)" \
-    -e HOME=/home/devcon \
+    -e HOME=/home/pen \
     "${env_args[@]}" \
     "${mount_args[@]}" \
     "${gitconfig_args[@]}" \
@@ -246,7 +248,7 @@ cmd_launch() {
   # shellcheck disable=SC2046
   exec docker exec -it \
     --user "$(id -u):$(id -g)" \
-    -e HOME=/home/devcon \
+    -e HOME=/home/pen \
     "${exec_env_args[@]}" \
     "$name" $(harness_exec_cmd "$@")
 }
@@ -347,7 +349,7 @@ cmd_exec() {
     return 1
   fi
 
-  exec docker exec -it --user "$(id -u):$(id -g)" -e HOME=/home/devcon "$name" bash
+  exec docker exec -it --user "$(id -u):$(id -g)" -e HOME=/home/pen "$name" bash
 }
 
 cmd_stop() {
