@@ -10,7 +10,7 @@ _claude_devcon() {
 
   # Complete subcommands at position 1
   if [[ $COMP_CWORD -eq 1 ]]; then
-    COMPREPLY=( $(compgen -W "exec stop list" -- "$cur") )
+    COMPREPLY=( $(compgen -W "exec stop list sync-settings" -- "$cur") )
     return
   fi
 

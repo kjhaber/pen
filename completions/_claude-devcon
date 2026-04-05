@@ -17,6 +17,7 @@ _claude-devcon() {
         'exec:open a shell in a running container'
         'stop:stop and remove a container'
         'list:list all claude-devcon containers'
+        'sync-settings:sync host settings.json into ~/.claude-devcon/ (preserves devcon hooks/mcpServers)'
       )
       _describe 'command' commands
       ;;
