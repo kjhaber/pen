@@ -2,7 +2,13 @@
 # Unit tests for claude-devcon script functions
 
 setup() {
+  MOCK_BIN=$(mktemp -d)
+  export PATH="${MOCK_BIN}:${PATH}"
   source "${BATS_TEST_DIRNAME}/../claude-devcon"
+}
+
+teardown() {
+  rm -rf "${MOCK_BIN:-}"
 }
 
 @test "container_name: returns basename of current dir" {
@@ -187,4 +193,45 @@ setup() {
   run cmd_list "--names-only"
   [ "$status" -eq 0 ]
   [[ "$output" != *"NAMES"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# prompt / flag passthrough
+# ---------------------------------------------------------------------------
+
+# Helper: write a mock docker script that simulates a running container and
+# echoes exec args so tests can inspect what claude would have been called with.
+_mock_docker_running() {
+  cat > "${MOCK_BIN}/docker" << 'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  ps)   echo "fakeid" ;;  # pretend container is already running
+  exec) echo "$@" ;;      # echo exec args instead of actually exec-ing
+esac
+EOF
+  chmod +x "${MOCK_BIN}/docker"
+}
+
+@test "cmd_launch: passes a prompt string through to claude" {
+  _mock_docker_running
+  run cmd_launch "fix the authentication bug"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"fix the authentication bug"* ]]
+}
+
+@test "cmd_launch: passes flags like --print through to claude" {
+  _mock_docker_running
+  run cmd_launch --print "what does this function do"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--print"* ]]
+  [[ "$output" == *"what does this function do"* ]]
+}
+
+@test "cmd_launch: runs claude with no extra args when called with no arguments" {
+  _mock_docker_running
+  run cmd_launch
+  [ "$status" -eq 0 ]
+  # claude is invoked but no extra prompt/flags appended beyond --dangerously-skip-permissions
+  [[ "$output" == *"claude --dangerously-skip-permissions"* ]]
+  [[ "$output" != *"fix"* ]]
 }

@@ -74,7 +74,7 @@ cmd_launch() {
       -e HOME=/home/devcon \
       -e CLAUDE_CONFIG_DIR=/home/devcon/.claude \
       -e "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}" \
-      "$name" claude --dangerously-skip-permissions
+      "$name" claude --dangerously-skip-permissions "$@"
   fi
 
   # Stopped — remove stale container so we recreate it fresh below
@@ -122,7 +122,7 @@ cmd_launch() {
     -e HOME=/home/devcon \
     -e CLAUDE_CONFIG_DIR=/home/devcon/.claude \
     -e "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}" \
-    "$name" claude --dangerously-skip-permissions
+    "$name" claude --dangerously-skip-permissions "$@"
 }
 
 cmd_exec() {
@@ -188,6 +188,5 @@ case "${1:-}" in
   exec)  cmd_exec "${2:-}" ;;
   stop)  cmd_stop "${2:-}" ;;
   list)  cmd_list "${2:-}" ;;
-  "")    cmd_launch ;;
-  *)     echo "Usage: claude-devcon [exec [name]|stop [name]|list [--names-only]]" >&2; exit 1 ;;
+  *)     cmd_launch "$@" ;;
 esac
