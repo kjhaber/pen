@@ -15,6 +15,14 @@ Run [Claude Code](https://claude.ai/code) inside an isolated Docker container, e
 
 ## Installation
 
+### Homebrew (recommended)
+
+```sh
+brew install kjhaber/tap/claude-devcon
+```
+
+### Manual
+
 ```sh
 make build    # build the Docker image
 make install  # install the claude-devcon script to ~/.local/bin
@@ -37,13 +45,17 @@ If you have an `ANTHROPIC_API_KEY` set in your shell, it is passed through autom
 
 ```sh
 # From any git worktree directory:
-claude-devcon          # start container (if needed) and launch Claude
-claude-devcon exec     # open a shell in the running container for $PWD
-claude-devcon stop     # stop and remove the container for $PWD
-claude-devcon list     # list all claude-devcon containers with status
+claude-devcon                        # start container (if needed) and launch Claude
+claude-devcon "fix the bug in auth"  # launch with an initial prompt
+claude-devcon --print "explain X"    # non-interactive output (any claude flag works)
+claude-devcon exec                   # open a shell in the container for $PWD
+claude-devcon exec [name]            # open a shell in any named container
+claude-devcon stop                   # stop and remove the container for $PWD
+claude-devcon stop [name]            # stop any named container
+claude-devcon list                   # list all claude-devcon containers with status
 ```
 
-Container names are derived from the directory basename (e.g. `myproject_auth-refactor`), matching the naming convention of `mkworktree`.
+Container names are derived from the directory basename (e.g. `myproject_auth-refactor`), matching the naming convention of `mkworktree`. `exec` and `stop` validate that the named container was created by claude-devcon before acting on it.
 
 ## Git worktrees
 

@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run script tests
+        run: |
+          npm install -g bats
+          make test-script
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes
+
+      - name: Compute tarball sha256
+        id: tarball
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          URL="https://github.com/${{ github.repository }}/archive/refs/tags/${TAG}.tar.gz"
+          SHA256=$(curl -fsSL --retry 5 --retry-delay 3 "$URL" | sha256sum | cut -d' ' -f1)
+          echo "url=${URL}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
+
+      - name: Update homebrew tap
+        env:
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        run: |
+          URL="${{ steps.tarball.outputs.url }}"
+          SHA256="${{ steps.tarball.outputs.sha256 }}"
+
+          git clone "https://x-access-token:${HOMEBREW_TAP_GITHUB_TOKEN}@github.com/kjhaber/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+
+          sed \
+            -e "s|%%URL%%|${URL}|g" \
+            -e "s|%%SHA256%%|${SHA256}|g" \
+            Formula/claude-devcon.rb > tap/Formula/claude-devcon.rb
+
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/claude-devcon.rb
+          git diff --staged --quiet || git commit -m "claude-devcon ${GITHUB_REF_NAME}"
+          git push
