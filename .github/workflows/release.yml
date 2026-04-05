@@ -34,7 +34,8 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           URL="https://github.com/${{ github.repository }}/archive/refs/tags/${TAG}.tar.gz"
-          SHA256=$(curl -fsSL --retry 5 --retry-delay 3 "$URL" | sha256sum | cut -d' ' -f1)
+          curl -fsSL --retry 10 --retry-delay 3 "$URL" -o /tmp/release.tar.gz
+          SHA256=$(sha256sum /tmp/release.tar.gz | cut -d' ' -f1)
           echo "url=${URL}" >> "$GITHUB_OUTPUT"
           echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
 
