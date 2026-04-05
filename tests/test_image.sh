@@ -3,7 +3,7 @@
 
 set -euo pipefail
 
-IMAGE="${CLAUDE_DEVCON_IMAGE:-claude-devcon:latest}"
+IMAGE="${PEN_IMAGE:-pen-claude:latest}"
 PASS=0
 FAIL=0
 

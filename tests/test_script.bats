@@ -1,23 +1,30 @@
 #!/usr/bin/env bats
-# Unit tests for claude-devcon script functions
+# Unit tests for pen script functions
 
 setup() {
   MOCK_BIN=$(mktemp -d)
   export PATH="${MOCK_BIN}:${PATH}"
-  source "${BATS_TEST_DIRNAME}/../claude-devcon"
+  source "${BATS_TEST_DIRNAME}/../pen"
+  # Set default harness so harness-dependent functions work without needing
+  # configure_harness called explicitly in every test
+  HARNESS=claude
+  HARNESS_IMAGE="pen-claude:latest"
+  HARNESS_CONFIG="${HOME}/.pen/claude"
+  HARNESS_CONTAINER_CONFIG="/home/devcon/.claude"
 }
 
 teardown() {
   rm -rf "${MOCK_BIN:-}"
 }
 
-@test "container_name: returns basename of current dir" {
+@test "container_name: returns pen_ prefix plus sanitized basename" {
   local tmpdir
   tmpdir=$(mktemp -d /tmp/devcon_test_XXXXX)
   cd "$tmpdir"
   run container_name
   [ "$status" -eq 0 ]
-  [ "$output" = "$(basename "$tmpdir" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]_-' '-' | sed 's/-*$//')" ]
+  local expected="pen_$(basename "$tmpdir" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]_-' '-' | sed 's/-*$//')"
+  [ "$output" = "$expected" ]
   cd /tmp
   rm -rf "$tmpdir"
 }
@@ -63,7 +70,7 @@ teardown() {
   cd "$wtdir"
   run container_name
   [ "$status" -eq 0 ]
-  [ "$output" = "devcon_auth-refactor" ]
+  [ "$output" = "pen_devcon_auth-refactor" ]
   cd /tmp
   rm -rf "$tmpdir"
 }
@@ -74,23 +81,23 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# _is_devcon_container
+# _is_pen_container
 # ---------------------------------------------------------------------------
 
-@test "_is_devcon_container: returns true for a known devcon container" {
+@test "_is_pen_container: returns true for a known pen container" {
   docker() {
     local args="$*"
-    if [[ "$args" == *"name=^devcon-foo"* && "$args" == *"label=claude-devcon=true"* ]]; then
+    if [[ "$args" == *"name=^pen-foo"* && "$args" == *"label=pen=true"* ]]; then
       echo "fakeid"
     fi
   }
-  run _is_devcon_container "devcon-foo"
+  run _is_pen_container "pen-foo"
   [ "$status" -eq 0 ]
 }
 
-@test "_is_devcon_container: returns false for an unknown container" {
+@test "_is_pen_container: returns false for an unknown container" {
   docker() { true; }  # always returns empty
-  run _is_devcon_container "not-a-devcon"
+  run _is_pen_container "not-a-pen"
   [ "$status" -ne 0 ]
 }
 
@@ -98,19 +105,17 @@ teardown() {
 # cmd_stop with explicit container name
 # ---------------------------------------------------------------------------
 
-@test "cmd_stop: rejects a non-devcon container name with error" {
-  docker() { true; }  # _is_devcon_container returns empty → not a devcon container
-  run cmd_stop "not-a-devcon"
+@test "cmd_stop: rejects a non-pen container name with error" {
+  docker() { true; }  # _is_pen_container returns empty → not a pen container
+  run cmd_stop "not-a-pen"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"not a claude-devcon container"* ]]
+  [[ "$output" == *"not a pen container"* ]]
 }
 
-@test "cmd_stop: stops and removes a valid devcon container by name" {
+@test "cmd_stop: stops and removes a valid pen container by name" {
   docker() {
     case "$1" in
       ps)
-        # Both _is_devcon_container (with label filter) and existence check (without)
-        # return a result for mycontainer
         if [[ "$*" == *"name=^mycontainer"* ]]; then
           echo "fakeid"
         fi ;;
@@ -122,12 +127,12 @@ teardown() {
   [[ "$output" == *"Stopped and removed: mycontainer"* ]]
 }
 
-@test "cmd_stop: reports missing container for a valid devcon name that no longer exists" {
+@test "cmd_stop: reports missing container for a valid pen name that no longer exists" {
   docker() {
     case "$1" in
       ps)
-        # _is_devcon_container passes (has label filter): container is known devcon
-        if [[ "$*" == *"label=claude-devcon=true"* && "$*" == *"name=^gone-container"* ]]; then
+        # _is_pen_container passes (has label filter): container is known pen container
+        if [[ "$*" == *"label=pen=true"* && "$*" == *"name=^gone-container"* ]]; then
           echo "fakeid"
         fi
         # Existence check without label filter: return empty (container gone)
@@ -143,19 +148,19 @@ teardown() {
 # cmd_exec with explicit container name
 # ---------------------------------------------------------------------------
 
-@test "cmd_exec: rejects a non-devcon container name with error" {
+@test "cmd_exec: rejects a non-pen container name with error" {
   docker() { true; }
-  run cmd_exec "not-a-devcon"
+  run cmd_exec "not-a-pen"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"not a claude-devcon container"* ]]
+  [[ "$output" == *"not a pen container"* ]]
 }
 
-@test "cmd_exec: reports error when devcon container exists but is not running" {
+@test "cmd_exec: reports error when pen container exists but is not running" {
   docker() {
     case "$1" in
       ps)
-        # _is_devcon_container (with -aq and label filter): passes
-        if [[ "$*" == *"label=claude-devcon=true"* && "$*" == *"name=^stopped-container"* ]]; then
+        # _is_pen_container (with -aq and label filter): passes
+        if [[ "$*" == *"label=pen=true"* && "$*" == *"name=^stopped-container"* ]]; then
           echo "fakeid"
         fi
         # Running check (with -q, no -a, no label filter): return empty
@@ -173,21 +178,21 @@ teardown() {
 
 @test "cmd_list: --names-only outputs container names one per line" {
   docker() {
-    if [[ "$*" == *"label=claude-devcon=true"* && "$*" == *"{{.Names}}"* ]]; then
-      echo "devcon-foo"
-      echo "devcon-bar"
+    if [[ "$*" == *"label=pen=true"* && "$*" == *"{{.Names}}"* ]]; then
+      echo "pen-foo"
+      echo "pen-bar"
     fi
   }
   run cmd_list "--names-only"
   [ "$status" -eq 0 ]
-  [ "${lines[0]}" = "devcon-foo" ]
-  [ "${lines[1]}" = "devcon-bar" ]
+  [ "${lines[0]}" = "pen-foo" ]
+  [ "${lines[1]}" = "pen-bar" ]
 }
 
 @test "cmd_list: --names-only produces no table header" {
   docker() {
-    if [[ "$*" == *"label=claude-devcon=true"* && "$*" == *"{{.Names}}"* ]]; then
-      echo "devcon-foo"
+    if [[ "$*" == *"label=pen=true"* && "$*" == *"{{.Names}}"* ]]; then
+      echo "pen-foo"
     fi
   }
   run cmd_list "--names-only"
@@ -240,13 +245,13 @@ EOF
 # cmd_launch: live mounts for host CLAUDE.md and commands/
 # ---------------------------------------------------------------------------
 
-# Helper: create a minimal fake HOME with .claude and .claude-devcon dirs
+# Helper: create a minimal fake HOME with .claude and .pen/claude dirs
 _setup_fake_home() {
   local fake_home="$1"
   mkdir -p "${fake_home}/.claude/commands"
   touch "${fake_home}/.claude/CLAUDE.md"
   touch "${fake_home}/.claude/commands/test-cmd.md"
-  mkdir -p "${fake_home}/.claude-devcon"
+  mkdir -p "${fake_home}/.pen/claude"
 }
 
 # Helper: mock docker for a new (non-running) container; logs docker run args to a file
@@ -267,7 +272,7 @@ EOF
   fake_home=$(mktemp -d)
   _setup_fake_home "$fake_home"
   _mock_docker_new
-  HOME="$fake_home" CLAUDE_CONFIG="${fake_home}/.claude-devcon" run cmd_launch
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/claude" run cmd_launch
   local run_args
   run_args=$(cat "${MOCK_BIN}/.docker_run_log" 2>/dev/null)
   [[ "$run_args" == *"${fake_home}/.claude/CLAUDE.md:/home/devcon/.claude/CLAUDE.md:ro"* ]]
@@ -279,7 +284,7 @@ EOF
   fake_home=$(mktemp -d)
   _setup_fake_home "$fake_home"
   _mock_docker_new
-  HOME="$fake_home" CLAUDE_CONFIG="${fake_home}/.claude-devcon" run cmd_launch
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/claude" run cmd_launch
   local run_args
   run_args=$(cat "${MOCK_BIN}/.docker_run_log" 2>/dev/null)
   [[ "$run_args" == *"${fake_home}/.claude/commands:/home/devcon/.claude/commands:ro"* ]]
@@ -289,9 +294,9 @@ EOF
 @test "cmd_launch: does not mount CLAUDE.md when source does not exist" {
   local fake_home
   fake_home=$(mktemp -d)
-  mkdir -p "${fake_home}/.claude-devcon"
+  mkdir -p "${fake_home}/.pen/claude"
   _mock_docker_new
-  HOME="$fake_home" CLAUDE_CONFIG="${fake_home}/.claude-devcon" run cmd_launch
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/claude" run cmd_launch
   local run_args
   run_args=$(cat "${MOCK_BIN}/.docker_run_log" 2>/dev/null)
   [[ "$run_args" != *"CLAUDE.md:ro"* ]]
@@ -301,9 +306,9 @@ EOF
 @test "cmd_launch: does not mount commands dir when source does not exist" {
   local fake_home
   fake_home=$(mktemp -d)
-  mkdir -p "${fake_home}/.claude-devcon"
+  mkdir -p "${fake_home}/.pen/claude"
   _mock_docker_new
-  HOME="$fake_home" CLAUDE_CONFIG="${fake_home}/.claude-devcon" run cmd_launch
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/claude" run cmd_launch
   local run_args
   run_args=$(cat "${MOCK_BIN}/.docker_run_log" 2>/dev/null)
   [[ "$run_args" != *"/commands:ro"* ]]
@@ -318,17 +323,17 @@ _require_jq() {
   command -v jq &>/dev/null || skip "jq not available"
 }
 
-@test "cmd_sync: creates devcon settings from host, stripping hooks and mcpServers" {
+@test "cmd_sync: creates pen settings from host, stripping hooks and mcpServers" {
   _require_jq
   local fake_home
   fake_home=$(mktemp -d)
-  mkdir -p "${fake_home}/.claude" "${fake_home}/.claude-devcon"
+  mkdir -p "${fake_home}/.claude" "${fake_home}/.pen/claude"
   printf '%s\n' '{"theme":"dark","hooks":{"Stop":[]},"mcpServers":{"s":{"command":"x"}},"env":{"DISABLE_AUTOUPDATER":1}}' \
     > "${fake_home}/.claude/settings.json"
-  HOME="$fake_home" CLAUDE_CONFIG="${fake_home}/.claude-devcon" run cmd_sync --yes
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/claude" run cmd_sync --yes
   [ "$status" -eq 0 ]
   local result
-  result=$(cat "${fake_home}/.claude-devcon/settings.json")
+  result=$(cat "${fake_home}/.pen/claude/settings.json")
   [[ "$result" == *'"dark"'* ]]
   [[ "$result" == *"DISABLE_AUTOUPDATER"* ]]
   [[ "$result" != *'"hooks"'* ]]
@@ -341,30 +346,30 @@ _require_jq() {
   _require_jq
   local fake_home
   fake_home=$(mktemp -d)
-  mkdir -p "${fake_home}/.claude" "${fake_home}/.claude-devcon"
+  mkdir -p "${fake_home}/.claude" "${fake_home}/.pen/claude"
   printf '%s\n' '{"theme":"dark"}' > "${fake_home}/.claude/settings.json"
-  HOME="$fake_home" CLAUDE_CONFIG="${fake_home}/.claude-devcon" run cmd_sync --yes
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/claude" run cmd_sync --yes
   [ "$status" -eq 0 ]
   local result
-  result=$(cat "${fake_home}/.claude-devcon/settings.json")
+  result=$(cat "${fake_home}/.pen/claude/settings.json")
   [[ "$result" == *'"skipDangerousModePermissionPrompt": true'* ]]
   rm -rf "$fake_home"
 }
 
-@test "cmd_sync: preserves devcon hooks and mcpServers when merging" {
+@test "cmd_sync: preserves pen hooks and mcpServers when merging" {
   _require_jq
   local fake_home
   fake_home=$(mktemp -d)
-  mkdir -p "${fake_home}/.claude" "${fake_home}/.claude-devcon"
+  mkdir -p "${fake_home}/.claude" "${fake_home}/.pen/claude"
   printf '%s\n' '{"theme":"dark","hooks":{"Stop":[{"command":"host-hook"}]}}' \
     > "${fake_home}/.claude/settings.json"
-  printf '%s\n' '{"hooks":{"Stop":[{"command":"devcon-hook"}]},"mcpServers":{"readonly-mcp":{"command":"bar"}}}' \
-    > "${fake_home}/.claude-devcon/settings.json"
-  HOME="$fake_home" CLAUDE_CONFIG="${fake_home}/.claude-devcon" run cmd_sync --yes
+  printf '%s\n' '{"hooks":{"Stop":[{"command":"pen-hook"}]},"mcpServers":{"readonly-mcp":{"command":"bar"}}}' \
+    > "${fake_home}/.pen/claude/settings.json"
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/claude" run cmd_sync --yes
   [ "$status" -eq 0 ]
   local result
-  result=$(cat "${fake_home}/.claude-devcon/settings.json")
-  [[ "$result" == *"devcon-hook"* ]]
+  result=$(cat "${fake_home}/.pen/claude/settings.json")
+  [[ "$result" == *"pen-hook"* ]]
   [[ "$result" != *"host-hook"* ]]
   [[ "$result" == *"readonly-mcp"* ]]
   [[ "$result" == *'"dark"'* ]]
@@ -375,12 +380,12 @@ _require_jq() {
   _require_jq
   local fake_home
   fake_home=$(mktemp -d)
-  mkdir -p "${fake_home}/.claude" "${fake_home}/.claude-devcon"
+  mkdir -p "${fake_home}/.claude" "${fake_home}/.pen/claude"
   printf '%s\n' '{"theme":"dark"}' > "${fake_home}/.claude/settings.json"
-  # Pre-populate devcon with the already-merged result (including the always-present field)
+  # Pre-populate pen config with the already-merged result
   jq 'del(.hooks, .mcpServers) + {skipDangerousModePermissionPrompt: true}' \
-    "${fake_home}/.claude/settings.json" > "${fake_home}/.claude-devcon/settings.json"
-  HOME="$fake_home" CLAUDE_CONFIG="${fake_home}/.claude-devcon" run cmd_sync
+    "${fake_home}/.claude/settings.json" > "${fake_home}/.pen/claude/settings.json"
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/claude" run cmd_sync
   [ "$status" -eq 0 ]
   [[ "$output" == *"already in sync"* ]]
   rm -rf "$fake_home"
@@ -390,24 +395,162 @@ _require_jq() {
   _require_jq
   local fake_home
   fake_home=$(mktemp -d)
-  mkdir -p "${fake_home}/.claude" "${fake_home}/.claude-devcon"
+  mkdir -p "${fake_home}/.claude" "${fake_home}/.pen/claude"
   printf '%s\n' '{"theme":"dark"}' > "${fake_home}/.claude/settings.json"
-  printf '%s\n' '{"theme":"light"}' > "${fake_home}/.claude-devcon/settings.json"
+  printf '%s\n' '{"theme":"light"}' > "${fake_home}/.pen/claude/settings.json"
   # Non-interactive (stdin from /dev/null, not a TTY): should show diff and exit non-zero
-  HOME="$fake_home" CLAUDE_CONFIG="${fake_home}/.claude-devcon" run cmd_sync < /dev/null
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/claude" run cmd_sync < /dev/null
   [ "$status" -ne 0 ]
   [[ "$output" == *"--yes"* ]]
   # File should be unchanged
-  [[ "$(cat "${fake_home}/.claude-devcon/settings.json")" == *"light"* ]]
+  [[ "$(cat "${fake_home}/.pen/claude/settings.json")" == *"light"* ]]
   rm -rf "$fake_home"
 }
 
 @test "cmd_sync: errors when source settings.json does not exist" {
   local fake_home
   fake_home=$(mktemp -d)
-  mkdir -p "${fake_home}/.claude-devcon"
-  HOME="$fake_home" CLAUDE_CONFIG="${fake_home}/.claude-devcon" run cmd_sync
+  mkdir -p "${fake_home}/.pen/claude"
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/claude" run cmd_sync
   [ "$status" -ne 0 ]
   [[ "$output" == *"No source settings"* ]]
   rm -rf "$fake_home"
+}
+
+# ---------------------------------------------------------------------------
+# _read_toml_str
+# ---------------------------------------------------------------------------
+
+@test "_read_toml_str: extracts a string value from TOML file" {
+  local tmpfile; tmpfile=$(mktemp)
+  printf 'harness = "cursor"\n' > "$tmpfile"
+  run _read_toml_str "$tmpfile" harness
+  [ "$status" -eq 0 ]
+  [ "$output" = "cursor" ]
+  rm -f "$tmpfile"
+}
+
+@test "_read_toml_str: returns empty when key not found" {
+  local tmpfile; tmpfile=$(mktemp)
+  printf 'other = "value"\n' > "$tmpfile"
+  run _read_toml_str "$tmpfile" harness
+  [ "$output" = "" ]
+  rm -f "$tmpfile"
+}
+
+# ---------------------------------------------------------------------------
+# resolve_harness
+# ---------------------------------------------------------------------------
+
+@test "resolve_harness: defaults to claude when no config or flag" {
+  local tmpdir; tmpdir=$(mktemp -d)
+  cat > "${MOCK_BIN}/git" << 'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  CLI_HARNESS="" HOME="$tmpdir" run resolve_harness
+  [ "$status" -eq 0 ]
+  [ "$output" = "claude" ]
+  rm -rf "$tmpdir"
+}
+
+@test "resolve_harness: reads harness from .pen.toml in git root" {
+  local tmpdir; tmpdir=$(mktemp -d)
+  printf 'harness = "cursor"\n' > "${tmpdir}/.pen.toml"
+  cat > "${MOCK_BIN}/git" << EOF
+#!/usr/bin/env bash
+echo "$tmpdir"
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  local fake_home; fake_home=$(mktemp -d)
+  CLI_HARNESS="" HOME="$fake_home" run resolve_harness
+  [ "$status" -eq 0 ]
+  [ "$output" = "cursor" ]
+  rm -rf "$tmpdir" "$fake_home"
+}
+
+@test "resolve_harness: uses user config.toml as fallback when no .pen.toml" {
+  local fake_home; fake_home=$(mktemp -d)
+  mkdir -p "${fake_home}/.pen"
+  printf 'harness = "opencode"\n' > "${fake_home}/.pen/config.toml"
+  cat > "${MOCK_BIN}/git" << 'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  CLI_HARNESS="" HOME="$fake_home" run resolve_harness
+  [ "$status" -eq 0 ]
+  [ "$output" = "opencode" ]
+  rm -rf "$fake_home"
+}
+
+@test "resolve_harness: CLI_HARNESS takes precedence over .pen.toml" {
+  local tmpdir; tmpdir=$(mktemp -d)
+  printf 'harness = "cursor"\n' > "${tmpdir}/.pen.toml"
+  cat > "${MOCK_BIN}/git" << EOF
+#!/usr/bin/env bash
+echo "$tmpdir"
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  CLI_HARNESS="opencode" run resolve_harness
+  [ "$status" -eq 0 ]
+  [ "$output" = "opencode" ]
+  rm -rf "$tmpdir"
+}
+
+# ---------------------------------------------------------------------------
+# configure_harness
+# ---------------------------------------------------------------------------
+
+@test "configure_harness: sets expected globals for claude harness" {
+  local fake_home; fake_home=$(mktemp -d)
+  HARNESS=claude HOME="$fake_home" configure_harness
+  [ "$HARNESS_IMAGE" = "pen-claude:latest" ]
+  [ "$HARNESS_CONFIG" = "${fake_home}/.pen/claude" ]
+  [ "$HARNESS_CONTAINER_CONFIG" = "/home/devcon/.claude" ]
+  rm -rf "$fake_home"
+}
+
+@test "configure_harness: PEN_IMAGE overrides default image" {
+  local fake_home; fake_home=$(mktemp -d)
+  HARNESS=claude HOME="$fake_home" PEN_IMAGE="myregistry/pen-claude:v2" configure_harness
+  [ "$HARNESS_IMAGE" = "myregistry/pen-claude:v2" ]
+  rm -rf "$fake_home"
+}
+
+@test "configure_harness: unknown harness exits with error" {
+  HARNESS=unknownharness run configure_harness
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unknown harness"* ]]
+}
+
+@test "configure_harness: cursor harness exits with not-yet-implemented error" {
+  HARNESS=cursor run configure_harness
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not yet implemented"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# cmd_sync: harness guard
+# ---------------------------------------------------------------------------
+
+@test "cmd_sync: errors when harness is not claude" {
+  HARNESS=cursor run cmd_sync --yes
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"only supported for the claude harness"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# container_name: pen_ prefix
+# ---------------------------------------------------------------------------
+
+@test "container_name: output is prefixed with pen_" {
+  local tmpdir; tmpdir=$(mktemp -d /tmp/devcon_test_XXXXX)
+  cd "$tmpdir"
+  run container_name
+  [ "$status" -eq 0 ]
+  [[ "$output" == pen_* ]]
+  cd /tmp
+  rm -rf "$tmpdir"
 }

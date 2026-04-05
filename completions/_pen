@@ -1,9 +1,9 @@
-#compdef claude-devcon
-# zsh completion for claude-devcon
+#compdef pen
+# zsh completion for pen
 # Installed by Homebrew to $(brew --prefix)/share/zsh/site-functions/
 # or manually placed in a directory on your $fpath
 
-_claude-devcon() {
+_pen() {
   local state
 
   _arguments \
@@ -16,8 +16,8 @@ _claude-devcon() {
       commands=(
         'exec:open a shell in a running container'
         'stop:stop and remove a container'
-        'list:list all claude-devcon containers'
-        'sync-settings:sync host settings.json into ~/.claude-devcon/ (preserves devcon hooks/mcpServers)'
+        'list:list all pen containers'
+        'sync-settings:sync host settings.json into ~/.pen/claude/ (preserves pen hooks/mcpServers; claude harness only)'
       )
       _describe 'command' commands
       ;;
@@ -25,7 +25,7 @@ _claude-devcon() {
       case ${words[2]} in
         stop|exec)
           local -a containers
-          containers=( ${(f)"$(claude-devcon list --names-only 2>/dev/null)"} )
+          containers=( ${(f)"$(pen list --names-only 2>/dev/null)"} )
           _describe 'container' containers
           ;;
       esac
@@ -33,4 +33,4 @@ _claude-devcon() {
   esac
 }
 
-_claude-devcon "$@"
+_pen "$@"

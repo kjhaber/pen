@@ -52,11 +52,11 @@ jobs:
           sed \
             -e "s|%%URL%%|${URL}|g" \
             -e "s|%%SHA256%%|${SHA256}|g" \
-            Formula/claude-devcon.rb > tap/Formula/claude-devcon.rb
+            Formula/pen.rb > tap/Formula/pen.rb
 
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/claude-devcon.rb
-          git diff --staged --quiet || git commit -m "claude-devcon ${GITHUB_REF_NAME}"
+          git add Formula/pen.rb
+          git diff --staged --quiet || git commit -m "pen ${GITHUB_REF_NAME}"
           git push

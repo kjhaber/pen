@@ -1,0 +1,410 @@
+#!/usr/bin/env bash
+# pen — run a coding harness inside an isolated Docker container
+#
+# Usage:
+#   pen [--harness=<name>]                      start container (if needed) and launch harness
+#   pen [--harness=<name>] exec [container]     open a shell in a running container
+#   pen [--harness=<name>] stop [container]     stop and remove a container
+#   pen [--harness=<name>] list [--names-only]  list all pen containers
+#   pen [--harness=<name>] sync-settings [--yes]  sync host settings into pen config (claude only)
+#
+# Harness selection (highest to lowest priority):
+#   --harness=<name>           CLI flag
+#   .pen.toml (git root)       harness = "name"
+#   ~/.pen/config.toml         harness = "name"
+#   default: claude
+
+# ---------------------------------------------------------------------------
+# TOML parsing (simple key = "value" only — no sections)
+# ---------------------------------------------------------------------------
+
+_read_toml_str() {
+  local file="$1" key="$2"
+  grep -m1 "^${key}[[:space:]]*=" "$file" 2>/dev/null \
+    | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/'
+}
+
+# ---------------------------------------------------------------------------
+# Harness resolution
+# ---------------------------------------------------------------------------
+
+resolve_harness() {
+  # 1. CLI flag
+  [[ -n "${CLI_HARNESS:-}" ]] && { echo "$CLI_HARNESS"; return; }
+
+  # 2. .pen.toml in git root
+  local root
+  root=$(git rev-parse --show-toplevel 2>/dev/null)
+  if [[ -n "$root" && -f "$root/.pen.toml" ]]; then
+    local h; h=$(_read_toml_str "$root/.pen.toml" harness)
+    [[ -n "$h" ]] && { echo "$h"; return; }
+  fi
+
+  # 3. ~/.pen/config.toml user default
+  if [[ -f "${HOME}/.pen/config.toml" ]]; then
+    local h; h=$(_read_toml_str "${HOME}/.pen/config.toml" harness)
+    [[ -n "$h" ]] && { echo "$h"; return; }
+  fi
+
+  # 4. Default
+  echo "claude"
+}
+
+# ---------------------------------------------------------------------------
+# Harness configuration — sets globals used by all commands
+# ---------------------------------------------------------------------------
+
+# Sets: HARNESS_IMAGE, HARNESS_CONFIG, HARNESS_CONTAINER_CONFIG
+configure_harness() {
+  case "${HARNESS:-}" in
+    claude)
+      HARNESS_IMAGE="${PEN_IMAGE:-pen-claude:latest}"
+      HARNESS_CONFIG="${HOME}/.pen/claude"
+      HARNESS_CONTAINER_CONFIG="/home/devcon/.claude"
+      ;;
+    cursor|opencode)
+      echo "error: ${HARNESS} harness is not yet implemented" >&2
+      exit 1
+      ;;
+    *)
+      echo "error: unknown harness '${HARNESS:-}'. Known harnesses: claude" >&2
+      exit 1
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# Harness-specific helpers
+# ---------------------------------------------------------------------------
+
+# Echoes "-e KEY=VAL" pairs for docker run/exec
+harness_env_args() {
+  case "$HARNESS" in
+    claude)
+      echo "-e" "CLAUDE_CONFIG_DIR=${HARNESS_CONTAINER_CONFIG}"
+      echo "-e" "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}"
+      ;;
+  esac
+}
+
+# Echoes "-v src:dst:ro" pairs for live read-only mounts
+harness_live_mount_args() {
+  case "$HARNESS" in
+    claude)
+      local src="${HOME}/.claude"
+      [[ -f "${src}/CLAUDE.md" ]] \
+        && echo "-v" "${src}/CLAUDE.md:${HARNESS_CONTAINER_CONFIG}/CLAUDE.md:ro"
+      [[ -d "${src}/commands" ]] \
+        && echo "-v" "${src}/commands:${HARNESS_CONTAINER_CONFIG}/commands:ro"
+      ;;
+  esac
+}
+
+# Warns if a required API key is missing
+harness_api_key_check() {
+  case "$HARNESS" in
+    claude)
+      [[ -z "${ANTHROPIC_API_KEY:-}" ]] \
+        && echo "warning: ANTHROPIC_API_KEY is not set" >&2
+      ;;
+  esac
+}
+
+# Echoes the command + args to exec inside the container
+harness_exec_cmd() {
+  case "$HARNESS" in
+    claude) echo "claude" "--dangerously-skip-permissions" "$@" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+# Derive a Docker-safe container name from $PWD (pen_ prefix, lowercase, alphanum/underscore/hyphen)
+container_name() {
+  local base
+  base=$(basename "$PWD" \
+    | tr '[:upper:]' '[:lower:]' \
+    | tr -cs '[:alnum:]_-' '-' \
+    | sed 's/-*$//')
+  echo "pen_${base}"
+}
+
+# Return the main (primary) worktree path for the current git repo
+main_worktree() {
+  git worktree list 2>/dev/null | head -1 | awk '{print $1}'
+}
+
+# Return true if the named container exists and has the pen label
+_is_pen_container() {
+  local name="$1"
+  docker ps -aq \
+    --filter "name=^${name}$" \
+    --filter "label=pen=true" \
+    2>/dev/null | grep -q .
+}
+
+_ensure_config() {
+  if [[ ! -d "$HARNESS_CONFIG" ]]; then
+    echo "Creating pen config dir: $HARNESS_CONFIG" >&2
+    mkdir -p "$HARNESS_CONFIG"
+    _seed_config
+  fi
+}
+
+# Seed harness config from host on first creation so auth and preferences are inherited
+_seed_config() {
+  case "$HARNESS" in
+    claude)
+      local src="${HOME}/.claude"
+      [[ -d "$src" ]] || return 0
+      echo "Seeding config from ${src} ..." >&2
+      [[ -f "${src}/settings.json" ]] && cp "${src}/settings.json" "${HARNESS_CONFIG}/settings.json"
+      for d in sessions session-env; do
+        [[ -d "${src}/${d}" ]] && cp -r "${src}/${d}" "${HARNESS_CONFIG}/${d}"
+      done
+      [[ -f "${src}/CLAUDE.md" ]] && cp "${src}/CLAUDE.md" "${HARNESS_CONFIG}/CLAUDE.md"
+      [[ -d "${src}/commands" ]] && cp -r "${src}/commands" "${HARNESS_CONFIG}/commands"
+      echo "Done seeding config." >&2
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+cmd_launch() {
+  local name cwd main_wt
+  name=$(container_name)
+  cwd="$PWD"
+
+  # Already running — exec harness into it
+  if docker ps -q --filter "name=^${name}$" 2>/dev/null | grep -q .; then
+    local env_args=()
+    while IFS= read -r arg; do [[ -n "$arg" ]] && env_args+=("$arg"); done < <(harness_env_args)
+    # shellcheck disable=SC2046
+    exec docker exec -it \
+      --user "$(id -u):$(id -g)" \
+      -e HOME=/home/devcon \
+      "${env_args[@]}" \
+      "$name" $(harness_exec_cmd "$@")
+  fi
+
+  # Stopped — remove stale container so we recreate it fresh below
+  if docker ps -aq --filter "name=^${name}$" 2>/dev/null | grep -q .; then
+    echo "Removing stale container: $name" >&2
+    docker rm "$name" >/dev/null
+  fi
+
+  _ensure_config
+  harness_api_key_check
+
+  # Always mount the current worktree at its host path (preserves absolute paths)
+  local mount_args=("-v" "${cwd}:${cwd}")
+
+  # Live read-only mounts — always current, no staleness
+  local live_mount_args=()
+  while IFS= read -r arg; do
+    [[ -n "$arg" ]] && live_mount_args+=("$arg")
+  done < <(harness_live_mount_args)
+
+  # If linked worktree, also mount the main repo's .git dir
+  if main_wt=$(main_worktree 2>/dev/null) && [[ -n "$main_wt" && "$cwd" != "$main_wt" ]]; then
+    mount_args+=("-v" "${main_wt}/.git:${main_wt}/.git")
+  fi
+
+  # Mount .gitconfig read-only so git identity works inside the container
+  local gitconfig_args=()
+  [[ -f "${HOME}/.gitconfig" ]] && gitconfig_args=("-v" "${HOME}/.gitconfig:/home/devcon/.gitconfig:ro")
+
+  # Collect env args for docker run
+  local env_args=()
+  while IFS= read -r arg; do
+    [[ -n "$arg" ]] && env_args+=("$arg")
+  done < <(harness_env_args)
+
+  # Start container detached with a long-lived idle process; harness is exec'd in
+  docker run -d \
+    --name "$name" \
+    --label "pen=true" \
+    --label "pen.harness=${HARNESS}" \
+    --label "pen.worktree=${cwd}" \
+    --user "$(id -u):$(id -g)" \
+    -e HOME=/home/devcon \
+    "${env_args[@]}" \
+    "${mount_args[@]}" \
+    "${gitconfig_args[@]}" \
+    -v "${HARNESS_CONFIG}:${HARNESS_CONTAINER_CONFIG}" \
+    "${live_mount_args[@]}" \
+    -w "$cwd" \
+    "$HARNESS_IMAGE" sleep infinity >/dev/null
+
+  local exec_env_args=()
+  while IFS= read -r arg; do [[ -n "$arg" ]] && exec_env_args+=("$arg"); done < <(harness_env_args)
+  # shellcheck disable=SC2046
+  exec docker exec -it \
+    --user "$(id -u):$(id -g)" \
+    -e HOME=/home/devcon \
+    "${exec_env_args[@]}" \
+    "$name" $(harness_exec_cmd "$@")
+}
+
+cmd_sync() {
+  if [[ "${HARNESS:-}" != "claude" ]]; then
+    echo "error: sync-settings is only supported for the claude harness" >&2
+    return 1
+  fi
+
+  local yes=false
+  [[ "${1:-}" == "--yes" || "${1:-}" == "-y" ]] && yes=true
+
+  local src="${HOME}/.claude/settings.json"
+  local dst="${HARNESS_CONFIG}/settings.json"
+
+  if [[ ! -f "$src" ]]; then
+    echo "error: No source settings found at ${src}" >&2
+    return 1
+  fi
+
+  if ! command -v jq &>/dev/null; then
+    echo "error: jq is required for sync-settings" >&2
+    return 1
+  fi
+
+  _ensure_config
+
+  # Compute the merged result
+  local tmp
+  tmp=$(mktemp)
+  if [[ ! -f "$dst" ]]; then
+    jq 'del(.hooks, .mcpServers) + {skipDangerousModePermissionPrompt: true}' "$src" > "$tmp"
+  else
+    jq -s '
+      .[0] as $src | .[1] as $dst |
+      ($src | del(.hooks, .mcpServers))
+      + (if $dst.hooks then {hooks: $dst.hooks} else {} end)
+      + (if $dst.mcpServers then {mcpServers: $dst.mcpServers} else {} end)
+      + {skipDangerousModePermissionPrompt: true}
+    ' "$src" "$dst" > "$tmp"
+  fi
+
+  # Already in sync?
+  if [[ -f "$dst" ]] && diff -q "$dst" "$tmp" >/dev/null 2>&1; then
+    echo "Settings already in sync, no changes needed." >&2
+    rm -f "$tmp"
+    return 0
+  fi
+
+  # Show preview
+  echo "Changes to ${dst}:" >&2
+  if [[ -f "$dst" ]]; then
+    diff "$dst" "$tmp" || true
+  else
+    echo "(new file)" >&2
+    cat "$tmp"
+  fi
+
+  # Apply
+  if $yes; then
+    mv "$tmp" "$dst"
+    echo "Settings synced." >&2
+  elif [[ -t 0 ]]; then
+    printf '\nApply these changes? [y/N] '
+    local response
+    read -r response
+    if [[ "$response" =~ ^[Yy]$ ]]; then
+      mv "$tmp" "$dst"
+      echo "Settings synced." >&2
+    else
+      rm -f "$tmp"
+      echo "Aborted." >&2
+      return 1
+    fi
+  else
+    rm -f "$tmp"
+    echo "Run with --yes to apply." >&2
+    return 1
+  fi
+}
+
+cmd_exec() {
+  local name
+  if [[ -n "${1:-}" ]]; then
+    name="$1"
+    if ! _is_pen_container "$name"; then
+      echo "error: '${name}' is not a pen container" >&2
+      return 1
+    fi
+  else
+    name=$(container_name)
+  fi
+
+  if ! docker ps -q --filter "name=^${name}$" 2>/dev/null | grep -q .; then
+    echo "error: no running container for '${name}'" >&2
+    echo "Run 'pen' first to start one." >&2
+    return 1
+  fi
+
+  exec docker exec -it --user "$(id -u):$(id -g)" -e HOME=/home/devcon "$name" bash
+}
+
+cmd_stop() {
+  local name
+  if [[ -n "${1:-}" ]]; then
+    name="$1"
+    if ! _is_pen_container "$name"; then
+      echo "error: '${name}' is not a pen container" >&2
+      return 1
+    fi
+  else
+    name=$(container_name)
+  fi
+
+  if docker ps -aq --filter "name=^${name}$" 2>/dev/null | grep -q .; then
+    docker rm -f "$name" >/dev/null
+    echo "Stopped and removed: $name" >&2
+  else
+    echo "No container found for: $name" >&2
+    return 1
+  fi
+}
+
+cmd_list() {
+  if [[ "${1:-}" == "--names-only" ]]; then
+    docker ps -a \
+      --filter "label=pen=true" \
+      --format "{{.Names}}"
+    return
+  fi
+  docker ps -a \
+    --filter "label=pen=true" \
+    --format "table {{.Names}}\t{{.Label \"pen.harness\"}}\t{{.Label \"pen.worktree\"}}\t{{.Status}}"
+}
+
+# Allow sourcing for unit tests without executing main logic
+[[ "${BASH_SOURCE[0]}" != "${0}" ]] && return 0
+
+set -euo pipefail
+
+# Parse --harness flag; strip it from passthrough args
+CLI_HARNESS=""
+passthrough_args=()
+for arg in "$@"; do
+  case "$arg" in
+    --harness=*) CLI_HARNESS="${arg#--harness=}" ;;
+    *) passthrough_args+=("$arg") ;;
+  esac
+done
+
+HARNESS=$(resolve_harness)
+configure_harness
+
+case "${passthrough_args[0]:-}" in
+  exec)          cmd_exec "${passthrough_args[1]:-}" ;;
+  stop)          cmd_stop "${passthrough_args[1]:-}" ;;
+  list)          cmd_list "${passthrough_args[1]:-}" ;;
+  sync-settings) cmd_sync "${passthrough_args[@]:1}" ;;
+  *)             cmd_launch "${passthrough_args[@]}" ;;
+esac

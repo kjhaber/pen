@@ -1,8 +1,8 @@
-# bash completion for claude-devcon
+# bash completion for pen
 # Installed by Homebrew to $(brew --prefix)/etc/bash_completion.d/
 # or manually sourced from your .bash_profile / .bashrc
 
-_claude_devcon() {
+_pen() {
   local cur prev
   COMPREPLY=()
   cur="${COMP_WORDS[COMP_CWORD]}"
@@ -18,10 +18,10 @@ _claude_devcon() {
   case "$prev" in
     stop|exec)
       local containers
-      containers=$(claude-devcon list --names-only 2>/dev/null)
+      containers=$(pen list --names-only 2>/dev/null)
       COMPREPLY=( $(compgen -W "$containers" -- "$cur") )
       ;;
   esac
 }
 
-complete -F _claude_devcon claude-devcon
+complete -F _pen pen

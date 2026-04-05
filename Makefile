@@ -1,15 +1,17 @@
-IMAGE       ?= claude-devcon:latest
+IMAGE       ?= pen-claude:latest
 INSTALL_DIR ?= $(HOME)/.local/bin
 COMPLETION_BASH ?= $(HOME)/.local/share/bash-completion/completions
 COMPLETION_ZSH  ?= $(HOME)/.zsh/completions
 
-.PHONY: all build test test-script test-image install install-bin install-completions \
+.PHONY: all build build-claude test test-script test-image install install-bin install-completions \
         uninstall uninstall-bin uninstall-completions clean
 
 all: build test
 
-build:
-	docker build -t $(IMAGE) .
+build: build-claude
+
+build-claude:
+	docker build -t $(IMAGE) docker/claude/
 
 test: test-script test-image
 
@@ -25,27 +27,27 @@ install: install-bin install-completions
 
 install-bin:
 	mkdir -p $(INSTALL_DIR)
-	install -m 755 claude-devcon $(INSTALL_DIR)/claude-devcon
-	@echo "Installed to $(INSTALL_DIR)/claude-devcon"
+	install -m 755 pen $(INSTALL_DIR)/pen
+	@echo "Installed to $(INSTALL_DIR)/pen"
 	@echo "Ensure $(INSTALL_DIR) is in your PATH"
 
 install-completions:
 	mkdir -p $(COMPLETION_BASH)
-	install -m 644 completions/claude-devcon.bash $(COMPLETION_BASH)/claude-devcon
+	install -m 644 completions/pen.bash $(COMPLETION_BASH)/pen
 	mkdir -p $(COMPLETION_ZSH)
-	install -m 644 completions/_claude-devcon $(COMPLETION_ZSH)/_claude-devcon
-	@echo "Installed bash completion to $(COMPLETION_BASH)/claude-devcon"
-	@echo "Installed zsh completion to $(COMPLETION_ZSH)/_claude-devcon"
+	install -m 644 completions/_pen $(COMPLETION_ZSH)/_pen
+	@echo "Installed bash completion to $(COMPLETION_BASH)/pen"
+	@echo "Installed zsh completion to $(COMPLETION_ZSH)/_pen"
 
 uninstall: uninstall-bin uninstall-completions
 
 uninstall-bin:
-	rm -f $(INSTALL_DIR)/claude-devcon
-	@echo "Removed $(INSTALL_DIR)/claude-devcon"
+	rm -f $(INSTALL_DIR)/pen
+	@echo "Removed $(INSTALL_DIR)/pen"
 
 uninstall-completions:
-	rm -f $(COMPLETION_BASH)/claude-devcon
-	rm -f $(COMPLETION_ZSH)/_claude-devcon
+	rm -f $(COMPLETION_BASH)/pen
+	rm -f $(COMPLETION_ZSH)/_pen
 	@echo "Removed completions"
 
 clean:
