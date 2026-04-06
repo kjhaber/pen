@@ -1,17 +1,21 @@
-IMAGE       ?= pen-claude:latest
+IMAGE        ?= pen-claude:latest
+IMAGE_CURSOR ?= pen-cursor:latest
 INSTALL_DIR ?= $(HOME)/.local/bin
 COMPLETION_BASH ?= $(HOME)/.local/share/bash-completion/completions
 COMPLETION_ZSH  ?= $(HOME)/.zsh/completions
 
-.PHONY: all build build-claude test test-script test-image install install-bin install-completions \
+.PHONY: all build build-claude build-cursor test test-script test-image install install-bin install-completions \
         uninstall uninstall-bin uninstall-completions clean
 
 all: build test
 
-build: build-claude
+build: build-claude build-cursor
 
 build-claude:
 	docker build -t $(IMAGE) docker/claude/
+
+build-cursor:
+	docker build -t $(IMAGE_CURSOR) docker/cursor/
 
 test: test-script test-image
 
@@ -21,7 +25,8 @@ test-script:
 	bats tests/test_script.bats
 
 test-image: build
-	bash tests/test_image.sh
+	PEN_IMAGE="$(IMAGE)" bash tests/test_image.sh
+	PEN_IMAGE="$(IMAGE_CURSOR)" bash tests/test_image_cursor.sh
 
 install: install-bin install-completions
 
@@ -51,4 +56,4 @@ uninstall-completions:
 	@echo "Removed completions"
 
 clean:
-	docker rmi $(IMAGE) 2>/dev/null || true
+	docker rmi $(IMAGE) $(IMAGE_CURSOR) 2>/dev/null || true

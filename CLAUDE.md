@@ -6,7 +6,7 @@
 make test
 ```
 
-Runs `bats tests/test_script.bats` (unit tests) and `bash tests/test_image.sh` (Docker image checks). Requires `bats-core` (`brew install bats-core`) and a built image (`make build`).
+Runs `bats tests/test_script.bats` (unit tests) and `tests/test_image.sh` / `tests/test_image_cursor.sh` (Docker image checks). Requires `bats-core` (`brew install bats-core`) and built images (`make build`).
 
 ## Architecture decisions
 
@@ -20,9 +20,9 @@ Runs `bats tests/test_script.bats` (unit tests) and `bash tests/test_image.sh` (
 
 **`~/.pen/container-shared/` mount layout** — All containers get two mounts at their exact host paths (mirrored, so the path is identical on both sides):
   - `~/.pen/container-shared/ro/` — read-only in container. Contains pen-managed scripts (hooks, etc.). Written by `pen sync-settings`, never writable from inside a container.
-  - `~/.pen/container-shared/rw/` — read-write. Contains `claude/` (Claude Code's `CLAUDE_CONFIG_DIR`) and any other shared mutable state. Credentials, settings, memory, history, and session data live here.
+  - `~/.pen/container-shared/rw/` — read-write. Contains per-harness dirs (e.g. `claude/`, `cursor/`) for credentials, settings, and session data.
 
-  `CLAUDE_CONFIG_DIR` is set explicitly to `~/.pen/container-shared/rw/claude` because Claude Code doesn't reliably derive it from `HOME` inside a container. Since paths are mirrored, `HARNESS_CONFIG` is the same value on host and container — no translation needed.
+  `CLAUDE_CONFIG_DIR` is set to `~/.pen/container-shared/rw/claude` for the Claude harness. For Cursor, `CURSOR_CONFIG_DIR` and `CURSOR_DATA_DIR` both point to `~/.pen/container-shared/rw/cursor`. Since paths are mirrored, `HARNESS_CONFIG` is the same value on host and container — no translation needed.
 
 **macOS Keychain limitation** — On macOS, Claude Code stores auth credentials in the macOS Keychain, which is inaccessible from Linux Docker containers. The session files in `~/.claude/sessions/` are stubs; the real token is in the Keychain. Consequence: a one-time in-container login is required on first use. After that, credentials are stored as plain files in `~/.pen/claude/` and reused by all containers.
 
@@ -61,11 +61,11 @@ Runs `bats tests/test_script.bats` (unit tests) and `bash tests/test_image.sh` (
 
 Different machines can have different MCP servers — the field is user-local and not checked into the repo.
 
-**Separate image per harness** — `pen-claude:latest` for Claude, `pen-cursor:latest` for Cursor (when implemented), etc. The `PEN_IMAGE` env var overrides the image for any harness.
+**Separate image per harness** — `pen-claude:latest` for Claude, `pen-cursor:latest` for Cursor, etc. The `PEN_IMAGE` env var overrides the image for any harness.
 
 ## Things to be careful about
 
 - Do not widen the mount scope (e.g., mounting `~/projects/`) — it defeats the isolation purpose.
-- `_ensure_config` only seeds `~/.pen/<harness>/` if the directory doesn't exist yet. If the dir was created empty by an earlier run, seeding is skipped. Manual seeding for claude: copy `settings.json`, `sessions/`, `session-env/`, `CLAUDE.md` from `~/.claude/`.
+- `_ensure_config` only seeds `~/.pen/<harness>/` if the directory doesn't exist yet. If the dir was created empty by an earlier run, seeding is skipped. Manual seeding for claude: copy `settings.json`, `sessions/`, `session-env/`, `CLAUDE.md` from `~/.claude/`. For cursor: top-level `~/.cursor/*.json` and `rules/` are copied on first seed when `~/.cursor` exists.
 - Both `cmd_stop` and `cmd_exec` use `docker rm -f` / `docker exec` respectively. Stopped containers are removed and recreated on next launch rather than restarted — this avoids issues with stale container configs from previous script versions.
 - `configure_harness` is only called at the main entry point (after `BASH_SOURCE[0] == ${0}` check). Tests must set `HARNESS`, `HARNESS_IMAGE`, `HARNESS_CONFIG` directly in `setup()` or per-test. `HARNESS_CONTAINER_CONFIG` no longer exists — all paths mirror the host.

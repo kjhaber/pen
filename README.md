@@ -1,6 +1,6 @@
 # pen
 
-Run coding harnesses (Claude Code, and more) inside isolated Docker containers, enabling `--dangerously-skip-permissions` safely. Each git worktree gets its own container; credentials and preferences are shared across all of them.
+Run coding harnesses (Claude Code, Cursor Agent CLI, and more) inside isolated Docker containers with reduced permission friction. Each git worktree gets its own container; credentials and preferences are shared across all of them.
 
 ## How it works
 
@@ -8,6 +8,7 @@ Run coding harnesses (Claude Code, and more) inside isolated Docker containers, 
 - Runs as your host UID so file ownership is correct on mounted volumes
 - All containers for a given harness share `~/.pen/<harness>/` for credentials, settings, and memory
 - For Claude: `~/.claude/CLAUDE.md` and `~/.claude/commands/` are mounted read-only from the host — always current, no manual sync needed
+- For Cursor: host `~/.cursor/rules/` is mounted read-only into the pen config dir when present
 
 ## Prerequisites
 
@@ -41,6 +42,14 @@ The first time you run `pen`, Claude will prompt for:
 These prompts only appear once. All subsequent containers — including new worktrees — reuse the saved credentials and settings from `~/.pen/claude/`.
 
 If you have an `ANTHROPIC_API_KEY` set in your shell, it is passed through automatically and the login prompt is skipped.
+
+## Cursor harness
+
+Use `pen --harness=cursor`, set `harness = "cursor"` in `.pen.toml` / `~/.pen/config.toml`, or build with `make build-cursor` and run (default image `pen-cursor:latest`).
+
+Pen sets `CURSOR_CONFIG_DIR` and `CURSOR_DATA_DIR` to `~/.pen/container-shared/rw/cursor` (mirrored in the container). Optional `CURSOR_API_KEY` is passed through from the host if set.
+
+The agent is started as `agent --force` (fewer command-approval prompts). With `pen --print …`, pen adds `--trust` for headless/workspace trust. Run `agent login` inside `pen exec` if you need interactive authentication.
 
 ## Usage
 
@@ -93,14 +102,15 @@ Works with both the main worktree and linked worktrees. For linked worktrees, th
 
 | Variable | Default | Description |
 |---|---|---|
-| `PEN_IMAGE` | `pen-claude:latest` | Docker image to use (overrides harness default) |
+| `PEN_IMAGE` | `pen-claude:latest` or `pen-cursor:latest` | Docker image (overrides the default for the selected harness) |
+| `IMAGE` / `IMAGE_CURSOR` | `pen-claude:latest` / `pen-cursor:latest` | Tags used by `make build-claude` / `make build-cursor` |
 
-To customize the Claude image (add tools, change Go/Node versions), edit `docker/claude/Dockerfile` and run `make build`.
+To customize images, edit `docker/claude/Dockerfile` or `docker/cursor/Dockerfile` and run `make build`.
 
 ## Testing
 
 ```sh
 make test          # run all tests (requires bats-core)
 make test-script   # unit tests for the launcher script
-make test-image    # verify the Docker image has required tools
+make test-image    # verify Claude and Cursor Docker images have required tools
 ```

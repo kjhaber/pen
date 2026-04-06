@@ -249,6 +249,30 @@ EOF
   rm -rf "$fake_home"
 }
 
+@test "harness_exec_cmd: cursor uses agent --force" {
+  HARNESS=cursor run harness_exec_cmd
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"agent --force"* ]]
+}
+
+@test "harness_exec_cmd: cursor adds --trust when --print is in args" {
+  HARNESS=cursor run harness_exec_cmd --print "hello world"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"agent --force"* ]]
+  [[ "$output" == *"--trust"* ]]
+  [[ "$output" == *"--print"* ]]
+}
+
+@test "cmd_launch: cursor harness does not require guardrails hook" {
+  local fake_home; fake_home=$(mktemp -d)
+  mkdir -p "${fake_home}/.pen/container-shared/rw/cursor"
+  _mock_docker_running
+  HARNESS=cursor HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/container-shared/rw/cursor" run cmd_launch
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"agent --force"* ]]
+  rm -rf "$fake_home"
+}
+
 # ---------------------------------------------------------------------------
 # cmd_launch: guardrails preflight check
 # ---------------------------------------------------------------------------
@@ -553,16 +577,25 @@ EOF
   rm -rf "$fake_home"
 }
 
+@test "configure_harness: PEN_IMAGE overrides cursor default image" {
+  local fake_home; fake_home=$(mktemp -d)
+  HARNESS=cursor HOME="$fake_home" PEN_IMAGE="myregistry/pen-cursor:v3" configure_harness
+  [ "$HARNESS_IMAGE" = "myregistry/pen-cursor:v3" ]
+  rm -rf "$fake_home"
+}
+
 @test "configure_harness: unknown harness exits with error" {
   HARNESS=unknownharness run configure_harness
   [ "$status" -ne 0 ]
   [[ "$output" == *"unknown harness"* ]]
 }
 
-@test "configure_harness: cursor harness exits with not-yet-implemented error" {
-  HARNESS=cursor run configure_harness
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"not yet implemented"* ]]
+@test "configure_harness: sets expected globals for cursor harness" {
+  local fake_home; fake_home=$(mktemp -d)
+  HARNESS=cursor HOME="$fake_home" configure_harness
+  [ "$HARNESS_IMAGE" = "pen-cursor:latest" ]
+  [ "$HARNESS_CONFIG" = "${fake_home}/.pen/container-shared/rw/cursor" ]
+  rm -rf "$fake_home"
 }
 
 # ---------------------------------------------------------------------------

@@ -69,12 +69,16 @@ configure_harness() {
       HARNESS_IMAGE="${PEN_IMAGE:-pen-claude:latest}"
       HARNESS_CONFIG="${HOME}/.pen/container-shared/rw/claude"
       ;;
-    cursor|opencode)
+    cursor)
+      HARNESS_IMAGE="${PEN_IMAGE:-pen-cursor:latest}"
+      HARNESS_CONFIG="${HOME}/.pen/container-shared/rw/cursor"
+      ;;
+    opencode)
       echo "error: ${HARNESS} harness is not yet implemented" >&2
       exit 1
       ;;
     *)
-      echo "error: unknown harness '${HARNESS:-}'. Known harnesses: claude" >&2
+      echo "error: unknown harness '${HARNESS:-}'. Known harnesses: claude, cursor" >&2
       exit 1
       ;;
   esac
@@ -91,6 +95,11 @@ harness_env_args() {
       printf '%s\n' "-e" "CLAUDE_CONFIG_DIR=${HARNESS_CONFIG}"
       printf '%s\n' "-e" "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}"
       ;;
+    cursor)
+      printf '%s\n' "-e" "CURSOR_CONFIG_DIR=${HARNESS_CONFIG}"
+      printf '%s\n' "-e" "CURSOR_DATA_DIR=${HARNESS_CONFIG}"
+      printf '%s\n' "-e" "CURSOR_API_KEY=${CURSOR_API_KEY:-}"
+      ;;
   esac
 }
 
@@ -104,6 +113,12 @@ harness_live_mount_args() {
       fi
       if [[ -d "${src}/commands" ]]; then
         printf '%s\n' "-v" "${src}/commands:${HARNESS_CONFIG}/commands:ro"
+      fi
+      ;;
+    cursor)
+      local src="${HOME}/.cursor"
+      if [[ -d "${src}/rules" ]]; then
+        printf '%s\n' "-v" "${src}/rules:${HARNESS_CONFIG}/rules:ro"
       fi
       ;;
   esac
@@ -132,6 +147,10 @@ harness_api_key_check() {
       [[ -z "${ANTHROPIC_API_KEY:-}" ]] \
         && echo "warning: ANTHROPIC_API_KEY is not set" >&2
       ;;
+    cursor)
+      [[ -z "${CURSOR_API_KEY:-}" ]] \
+        && echo "warning: CURSOR_API_KEY is not set (use agent login in the container if needed)" >&2
+      ;;
   esac
 }
 
@@ -139,6 +158,18 @@ harness_api_key_check() {
 harness_exec_cmd() {
   case "$HARNESS" in
     claude) echo "claude" "--dangerously-skip-permissions" "$@" ;;
+    cursor)
+      # --force: fewer command-approval prompts; --trust with --print: workspace trust in headless mode
+      local trust=()
+      local a
+      for a in "$@"; do
+        if [[ "$a" == "--print" ]]; then
+          trust=(--trust)
+          break
+        fi
+      done
+      echo "agent" "--force" "${trust[@]}" "$@"
+      ;;
   esac
 }
 
@@ -191,6 +222,19 @@ _seed_config() {
       done
       [[ -f "${src}/CLAUDE.md" ]] && cp "${src}/CLAUDE.md" "${HARNESS_CONFIG}/CLAUDE.md"
       [[ -d "${src}/commands" ]] && cp -r "${src}/commands" "${HARNESS_CONFIG}/commands"
+      echo "Done seeding config." >&2
+      ;;
+    cursor)
+      local src="${HOME}/.cursor"
+      [[ -d "$src" ]] || return 0
+      echo "Seeding config from ${src} ..." >&2
+      local f
+      shopt -s nullglob
+      for f in "${src}"/*.json; do
+        cp "$f" "${HARNESS_CONFIG}/"
+      done
+      shopt -u nullglob
+      [[ -d "${src}/rules" ]] && cp -a "${src}/rules" "${HARNESS_CONFIG}/rules"
       echo "Done seeding config." >&2
       ;;
   esac
