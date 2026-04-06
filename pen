@@ -6,6 +6,7 @@
 #   pen [--harness=<name>] exec [container]     open a shell in a running container
 #   pen [--harness=<name>] stop [container]     stop and remove a container
 #   pen [--harness=<name>] list [--names-only]  list all pen containers
+#   pen [--harness=<name>] merge                  merge current worktree branch into main worktree
 #   pen [--harness=<name>] sync-settings [--yes]  sync host settings into pen config (claude only)
 #   pen -- <args>                               pass args directly to harness (bypass pen flag parsing)
 #   pen --help | -h                             show this help text
@@ -59,13 +60,14 @@ resolve_harness() {
 # Harness configuration — sets globals used by all commands
 # ---------------------------------------------------------------------------
 
-# Sets: HARNESS_IMAGE, HARNESS_CONFIG, HARNESS_CONTAINER_CONFIG
+# Sets: HARNESS_IMAGE, HARNESS_CONFIG
+# HARNESS_CONFIG is the same path on host and container (mirrored mount).
+# Derived from it: pen_shared_rw=$(dirname HARNESS_CONFIG), pen_shared_ro=sibling ro/
 configure_harness() {
   case "${HARNESS:-}" in
     claude)
       HARNESS_IMAGE="${PEN_IMAGE:-pen-claude:latest}"
-      HARNESS_CONFIG="${HOME}/.pen/claude"
-      HARNESS_CONTAINER_CONFIG="/home/pen/.claude"
+      HARNESS_CONFIG="${HOME}/.pen/container-shared/rw/claude"
       ;;
     cursor|opencode)
       echo "error: ${HARNESS} harness is not yet implemented" >&2
@@ -86,7 +88,7 @@ configure_harness() {
 harness_env_args() {
   case "$HARNESS" in
     claude)
-      printf '%s\n' "-e" "CLAUDE_CONFIG_DIR=${HARNESS_CONTAINER_CONFIG}"
+      printf '%s\n' "-e" "CLAUDE_CONFIG_DIR=${HARNESS_CONFIG}"
       printf '%s\n' "-e" "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}"
       ;;
   esac
@@ -98,10 +100,26 @@ harness_live_mount_args() {
     claude)
       local src="${HOME}/.claude"
       if [[ -f "${src}/CLAUDE.md" ]]; then
-        printf '%s\n' "-v" "${src}/CLAUDE.md:${HARNESS_CONTAINER_CONFIG}/CLAUDE.md:ro"
+        printf '%s\n' "-v" "${src}/CLAUDE.md:${HARNESS_CONFIG}/CLAUDE.md:ro"
       fi
       if [[ -d "${src}/commands" ]]; then
-        printf '%s\n' "-v" "${src}/commands:${HARNESS_CONTAINER_CONFIG}/commands:ro"
+        printf '%s\n' "-v" "${src}/commands:${HARNESS_CONFIG}/commands:ro"
+      fi
+      ;;
+  esac
+}
+
+# Runs harness-specific preflight checks; exits on failure
+harness_preflight_check() {
+  case "$HARNESS" in
+    claude)
+      local pen_shared_ro
+      pen_shared_ro="$(dirname "$(dirname "${HARNESS_CONFIG}")")/ro"
+      local guardrails_hook="${pen_shared_ro}/hooks/pen-guardrails.sh"
+      if [[ ! -x "$guardrails_hook" ]]; then
+        echo "error: guardrails hook not found at ${guardrails_hook}" >&2
+        echo "Run 'pen sync-settings' to install it." >&2
+        exit 1
       fi
       ;;
   esac
@@ -183,6 +201,8 @@ _seed_config() {
 # ---------------------------------------------------------------------------
 
 cmd_launch() {
+  harness_preflight_check
+
   local name cwd main_wt
   name=$(container_name)
   cwd="$PWD"
@@ -207,6 +227,11 @@ cmd_launch() {
 
   _ensure_config
   harness_api_key_check
+
+  # Derive container-shared dirs from HARNESS_CONFIG (same path on host and container)
+  local pen_shared_rw pen_shared_ro
+  pen_shared_rw="$(dirname "${HARNESS_CONFIG}")"
+  pen_shared_ro="$(dirname "${pen_shared_rw}")/ro"
 
   # Always mount the current worktree at its host path (preserves absolute paths)
   local mount_args=("-v" "${cwd}:${cwd}")
@@ -243,7 +268,8 @@ cmd_launch() {
     "${env_args[@]}" \
     "${mount_args[@]}" \
     "${gitconfig_args[@]}" \
-    -v "${HARNESS_CONFIG}:${HARNESS_CONTAINER_CONFIG}" \
+    -v "${pen_shared_ro}:${pen_shared_ro}:ro" \
+    -v "${pen_shared_rw}:${pen_shared_rw}" \
     "${live_mount_args[@]}" \
     -w "$cwd" \
     "$HARNESS_IMAGE" sleep infinity >/dev/null
@@ -269,6 +295,11 @@ cmd_sync() {
 
   local src="${HOME}/.claude/settings.json"
   local dst="${HARNESS_CONFIG}/settings.json"
+  local pen_shared_rw pen_shared_ro hooks_dir guardrails_hook
+  pen_shared_rw="$(dirname "${HARNESS_CONFIG}")"
+  pen_shared_ro="$(dirname "${pen_shared_rw}")/ro"
+  hooks_dir="${pen_shared_ro}/hooks"
+  guardrails_hook="${hooks_dir}/pen-guardrails.sh"
 
   if [[ ! -f "$src" ]]; then
     echo "error: No source settings found at ${src}" >&2
@@ -281,21 +312,75 @@ cmd_sync() {
   fi
 
   _ensure_config
+  mkdir -p "$pen_shared_ro" "$pen_shared_rw" "$hooks_dir"
+
+  # Write the guardrails hook script (always up-to-date)
+  cat > "$guardrails_hook" << 'GUARDRAILS_EOF'
+#!/usr/bin/env bash
+# pen-guardrails.sh — PreToolUse hook for pen containers
+# Managed by 'pen sync-settings'. Do not edit by hand.
+# Receives Claude Code hook event JSON on stdin; exits non-zero to block.
+
+INPUT=$(cat)
+TOOL=$(printf '%s' "$INPUT" | jq -r '.tool_name // ""')
+[[ "$TOOL" != "Bash" ]] && exit 0
+
+CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // ""')
+
+# Block: gh pr create (drafting with gh pr view/diff is allowed)
+if printf '%s' "$CMD" | grep -qE '^\s*gh\s+pr\s+create(\s|$)'; then
+  printf 'pen guardrail: gh pr create is blocked. Draft PR description with gh pr view/diff, then create the PR from the host.\n' >&2
+  exit 1
+fi
+
+# Block: git push --force / -f / --force-with-lease
+if printf '%s' "$CMD" | grep -qE '^\s*git\s+push\b' \
+  && printf '%s' "$CMD" | grep -qE '(^|\s)(--force|--force-with-lease|-f)(\s|$)'; then
+  printf 'pen guardrail: git push --force is blocked.\n' >&2
+  exit 1
+fi
+
+# Block: git push to protected branches (main, master, develop)
+if printf '%s' "$CMD" | grep -qE '^\s*git\s+push\b' \
+  && printf '%s' "$CMD" | grep -qE '\b(main|master|develop)\b'; then
+  printf 'pen guardrail: pushing to main/master/develop is blocked. Use pen merge from the host.\n' >&2
+  exit 1
+fi
+
+exit 0
+GUARDRAILS_EOF
+  chmod +x "$guardrails_hook"
 
   # Compute the merged result
-  local tmp
+  local tmp dst_json
   tmp=$(mktemp)
-  if [[ ! -f "$dst" ]]; then
-    jq 'del(.hooks, .mcpServers) + {skipDangerousModePermissionPrompt: true}' "$src" > "$tmp"
-  else
-    jq -s '
-      .[0] as $src | .[1] as $dst |
+  dst_json="{}"
+  [[ -f "$dst" ]] && dst_json=$(cat "$dst")
+
+  jq -n \
+    --argjson src "$(cat "$src")" \
+    --argjson dst "$dst_json" \
+    --arg guardrails_hook "$guardrails_hook" \
+    '
       ($src | del(.hooks, .mcpServers))
-      + (if $dst.hooks then {hooks: $dst.hooks} else {} end)
       + (if $dst.mcpServers then {mcpServers: $dst.mcpServers} else {} end)
       + {skipDangerousModePermissionPrompt: true}
-    ' "$src" "$dst" > "$tmp"
-  fi
+      + {
+          hooks: (
+            ($dst.hooks // {} | del(.PreToolUse))
+            + {
+                PreToolUse: [
+                  {
+                    matcher: "Bash",
+                    hooks: [
+                      {type: "command", command: $guardrails_hook}
+                    ]
+                  }
+                ]
+              }
+          )
+        }
+    ' > "$tmp"
 
   # Already in sync?
   if [[ -f "$dst" ]] && diff -q "$dst" "$tmp" >/dev/null 2>&1; then
@@ -334,6 +419,22 @@ cmd_sync() {
     echo "Run with --yes to apply." >&2
     return 1
   fi
+}
+
+cmd_merge() {
+  local branch current_root main_wt
+  if ! branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null); then
+    echo "error: not in a git repo" >&2
+    return 1
+  fi
+  current_root=$(git rev-parse --show-toplevel 2>/dev/null)
+  main_wt=$(main_worktree)
+  if [[ "$current_root" == "$main_wt" ]]; then
+    echo "error: run pen merge from a feature worktree, not the main worktree" >&2
+    return 1
+  fi
+  echo "Merging ${branch} into ${main_wt} ..." >&2
+  git -C "$main_wt" merge --no-ff "$branch"
 }
 
 cmd_exec() {
@@ -437,6 +538,7 @@ case "${passthrough_args[0]:-}" in
   exec)          cmd_exec "${passthrough_args[1]:-}" ;;
   stop)          cmd_stop "${passthrough_args[1]:-}" ;;
   list)          cmd_list "${passthrough_args[1]:-}" ;;
+  merge)         cmd_merge ;;
   sync-settings) cmd_sync "${passthrough_args[@]:1}" ;;
   *)             cmd_launch "${passthrough_args[@]}" ;;
 esac

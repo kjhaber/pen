@@ -9,8 +9,7 @@ setup() {
   # configure_harness called explicitly in every test
   HARNESS=claude
   HARNESS_IMAGE="pen-claude:latest"
-  HARNESS_CONFIG="${HOME}/.pen/claude"
-  HARNESS_CONTAINER_CONFIG="/home/pen/.claude"
+  HARNESS_CONFIG="${HOME}/.pen/container-shared/rw/claude"
 }
 
 teardown() {
@@ -218,40 +217,66 @@ EOF
 }
 
 @test "cmd_launch: passes a prompt string through to claude" {
+  local fake_home; fake_home=$(mktemp -d)
+  _setup_fake_home "$fake_home"
   _mock_docker_running
-  run cmd_launch "fix the authentication bug"
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/container-shared/rw/claude" run cmd_launch "fix the authentication bug"
   [ "$status" -eq 0 ]
   [[ "$output" == *"fix the authentication bug"* ]]
+  rm -rf "$fake_home"
 }
 
 @test "cmd_launch: passes flags like --print through to claude" {
+  local fake_home; fake_home=$(mktemp -d)
+  _setup_fake_home "$fake_home"
   _mock_docker_running
-  run cmd_launch --print "what does this function do"
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/container-shared/rw/claude" run cmd_launch --print "what does this function do"
   [ "$status" -eq 0 ]
   [[ "$output" == *"--print"* ]]
   [[ "$output" == *"what does this function do"* ]]
+  rm -rf "$fake_home"
 }
 
 @test "cmd_launch: runs claude with no extra args when called with no arguments" {
+  local fake_home; fake_home=$(mktemp -d)
+  _setup_fake_home "$fake_home"
   _mock_docker_running
-  run cmd_launch
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/container-shared/rw/claude" run cmd_launch
   [ "$status" -eq 0 ]
   # claude is invoked but no extra prompt/flags appended beyond --dangerously-skip-permissions
   [[ "$output" == *"claude --dangerously-skip-permissions"* ]]
   [[ "$output" != *"fix"* ]]
+  rm -rf "$fake_home"
+}
+
+# ---------------------------------------------------------------------------
+# cmd_launch: guardrails preflight check
+# ---------------------------------------------------------------------------
+
+@test "cmd_launch: errors when guardrails hook is absent" {
+  local fake_home; fake_home=$(mktemp -d)
+  mkdir -p "${fake_home}/.pen/container-shared/rw/claude"  # no ro/hooks
+  _mock_docker_running
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/container-shared/rw/claude" run cmd_launch
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"sync-settings"* ]]
+  rm -rf "$fake_home"
 }
 
 # ---------------------------------------------------------------------------
 # cmd_launch: live mounts for host CLAUDE.md and commands/
 # ---------------------------------------------------------------------------
 
-# Helper: create a minimal fake HOME with .claude and .pen/claude dirs
+# Helper: create a minimal fake HOME with .claude and container-shared dirs (including hook stub)
 _setup_fake_home() {
   local fake_home="$1"
   mkdir -p "${fake_home}/.claude/commands"
   touch "${fake_home}/.claude/CLAUDE.md"
   touch "${fake_home}/.claude/commands/test-cmd.md"
-  mkdir -p "${fake_home}/.pen/claude"
+  mkdir -p "${fake_home}/.pen/container-shared/rw/claude"
+  mkdir -p "${fake_home}/.pen/container-shared/ro/hooks"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "${fake_home}/.pen/container-shared/ro/hooks/pen-guardrails.sh"
+  chmod +x "${fake_home}/.pen/container-shared/ro/hooks/pen-guardrails.sh"
 }
 
 # Helper: mock docker for a new (non-running) container; logs docker run args to a file
@@ -272,10 +297,10 @@ EOF
   fake_home=$(mktemp -d)
   _setup_fake_home "$fake_home"
   _mock_docker_new
-  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/claude" run cmd_launch
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/container-shared/rw/claude" run cmd_launch
   local run_args
   run_args=$(cat "${MOCK_BIN}/.docker_run_log" 2>/dev/null)
-  [[ "$run_args" == *"${fake_home}/.claude/CLAUDE.md:/home/pen/.claude/CLAUDE.md:ro"* ]]
+  [[ "$run_args" == *"${fake_home}/.claude/CLAUDE.md:${fake_home}/.pen/container-shared/rw/claude/CLAUDE.md:ro"* ]]
   rm -rf "$fake_home"
 }
 
@@ -284,19 +309,22 @@ EOF
   fake_home=$(mktemp -d)
   _setup_fake_home "$fake_home"
   _mock_docker_new
-  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/claude" run cmd_launch
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/container-shared/rw/claude" run cmd_launch
   local run_args
   run_args=$(cat "${MOCK_BIN}/.docker_run_log" 2>/dev/null)
-  [[ "$run_args" == *"${fake_home}/.claude/commands:/home/pen/.claude/commands:ro"* ]]
+  [[ "$run_args" == *"${fake_home}/.claude/commands:${fake_home}/.pen/container-shared/rw/claude/commands:ro"* ]]
   rm -rf "$fake_home"
 }
 
 @test "cmd_launch: does not mount CLAUDE.md when source does not exist" {
   local fake_home
   fake_home=$(mktemp -d)
-  mkdir -p "${fake_home}/.pen/claude"
+  mkdir -p "${fake_home}/.pen/container-shared/ro/hooks" \
+            "${fake_home}/.pen/container-shared/rw/claude"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "${fake_home}/.pen/container-shared/ro/hooks/pen-guardrails.sh"
+  chmod +x "${fake_home}/.pen/container-shared/ro/hooks/pen-guardrails.sh"
   _mock_docker_new
-  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/claude" run cmd_launch
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/container-shared/rw/claude" run cmd_launch
   local run_args
   run_args=$(cat "${MOCK_BIN}/.docker_run_log" 2>/dev/null)
   [[ "$run_args" != *"CLAUDE.md:ro"* ]]
@@ -306,9 +334,12 @@ EOF
 @test "cmd_launch: does not mount commands dir when source does not exist" {
   local fake_home
   fake_home=$(mktemp -d)
-  mkdir -p "${fake_home}/.pen/claude"
+  mkdir -p "${fake_home}/.pen/container-shared/ro/hooks" \
+            "${fake_home}/.pen/container-shared/rw/claude"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "${fake_home}/.pen/container-shared/ro/hooks/pen-guardrails.sh"
+  chmod +x "${fake_home}/.pen/container-shared/ro/hooks/pen-guardrails.sh"
   _mock_docker_new
-  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/claude" run cmd_launch
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/container-shared/rw/claude" run cmd_launch
   local run_args
   run_args=$(cat "${MOCK_BIN}/.docker_run_log" 2>/dev/null)
   [[ "$run_args" != *"/commands:ro"* ]]
@@ -323,22 +354,24 @@ _require_jq() {
   command -v jq &>/dev/null || skip "jq not available"
 }
 
-@test "cmd_sync: creates pen settings from host, stripping hooks and mcpServers" {
+@test "cmd_sync: creates pen settings from host, stripping host hooks and mcpServers" {
   _require_jq
   local fake_home
   fake_home=$(mktemp -d)
-  mkdir -p "${fake_home}/.claude" "${fake_home}/.pen/claude"
-  printf '%s\n' '{"theme":"dark","hooks":{"Stop":[]},"mcpServers":{"s":{"command":"x"}},"env":{"DISABLE_AUTOUPDATER":1}}' \
+  mkdir -p "${fake_home}/.claude" "${fake_home}/.pen/container-shared/rw/claude"
+  printf '%s\n' '{"theme":"dark","hooks":{"Stop":[{"command":"host-stop-hook"}]},"mcpServers":{"s":{"command":"x"}},"env":{"DISABLE_AUTOUPDATER":1}}' \
     > "${fake_home}/.claude/settings.json"
-  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/claude" run cmd_sync --yes
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/container-shared/rw/claude" run cmd_sync --yes
   [ "$status" -eq 0 ]
   local result
-  result=$(cat "${fake_home}/.pen/claude/settings.json")
+  result=$(cat "${fake_home}/.pen/container-shared/rw/claude/settings.json")
   [[ "$result" == *'"dark"'* ]]
   [[ "$result" == *"DISABLE_AUTOUPDATER"* ]]
-  [[ "$result" != *'"hooks"'* ]]
   [[ "$result" != *'"mcpServers"'* ]]
+  [[ "$result" != *"host-stop-hook"* ]]
   [[ "$result" == *'"skipDangerousModePermissionPrompt"'* ]]
+  [[ "$result" == *'"PreToolUse"'* ]]
+  [[ "$result" == *'pen-guardrails'* ]]
   rm -rf "$fake_home"
 }
 
@@ -346,12 +379,12 @@ _require_jq() {
   _require_jq
   local fake_home
   fake_home=$(mktemp -d)
-  mkdir -p "${fake_home}/.claude" "${fake_home}/.pen/claude"
+  mkdir -p "${fake_home}/.claude" "${fake_home}/.pen/container-shared/rw/claude"
   printf '%s\n' '{"theme":"dark"}' > "${fake_home}/.claude/settings.json"
-  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/claude" run cmd_sync --yes
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/container-shared/rw/claude" run cmd_sync --yes
   [ "$status" -eq 0 ]
   local result
-  result=$(cat "${fake_home}/.pen/claude/settings.json")
+  result=$(cat "${fake_home}/.pen/container-shared/rw/claude/settings.json")
   [[ "$result" == *'"skipDangerousModePermissionPrompt": true'* ]]
   rm -rf "$fake_home"
 }
@@ -360,19 +393,21 @@ _require_jq() {
   _require_jq
   local fake_home
   fake_home=$(mktemp -d)
-  mkdir -p "${fake_home}/.claude" "${fake_home}/.pen/claude"
+  mkdir -p "${fake_home}/.claude" "${fake_home}/.pen/container-shared/rw/claude"
   printf '%s\n' '{"theme":"dark","hooks":{"Stop":[{"command":"host-hook"}]}}' \
     > "${fake_home}/.claude/settings.json"
   printf '%s\n' '{"hooks":{"Stop":[{"command":"pen-hook"}]},"mcpServers":{"readonly-mcp":{"command":"bar"}}}' \
-    > "${fake_home}/.pen/claude/settings.json"
-  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/claude" run cmd_sync --yes
+    > "${fake_home}/.pen/container-shared/rw/claude/settings.json"
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/container-shared/rw/claude" run cmd_sync --yes
   [ "$status" -eq 0 ]
   local result
-  result=$(cat "${fake_home}/.pen/claude/settings.json")
+  result=$(cat "${fake_home}/.pen/container-shared/rw/claude/settings.json")
   [[ "$result" == *"pen-hook"* ]]
   [[ "$result" != *"host-hook"* ]]
   [[ "$result" == *"readonly-mcp"* ]]
   [[ "$result" == *'"dark"'* ]]
+  [[ "$result" == *'"PreToolUse"'* ]]
+  [[ "$result" == *'pen-guardrails'* ]]
   rm -rf "$fake_home"
 }
 
@@ -380,12 +415,12 @@ _require_jq() {
   _require_jq
   local fake_home
   fake_home=$(mktemp -d)
-  mkdir -p "${fake_home}/.claude" "${fake_home}/.pen/claude"
+  mkdir -p "${fake_home}/.claude" "${fake_home}/.pen/container-shared/rw/claude"
   printf '%s\n' '{"theme":"dark"}' > "${fake_home}/.claude/settings.json"
-  # Pre-populate pen config with the already-merged result
-  jq 'del(.hooks, .mcpServers) + {skipDangerousModePermissionPrompt: true}' \
-    "${fake_home}/.claude/settings.json" > "${fake_home}/.pen/claude/settings.json"
-  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/claude" run cmd_sync
+  # First sync creates the pen settings (including hook registration)
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/container-shared/rw/claude" cmd_sync --yes >/dev/null 2>&1
+  # Second sync should detect no changes
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/container-shared/rw/claude" run cmd_sync
   [ "$status" -eq 0 ]
   [[ "$output" == *"already in sync"* ]]
   rm -rf "$fake_home"
@@ -395,23 +430,23 @@ _require_jq() {
   _require_jq
   local fake_home
   fake_home=$(mktemp -d)
-  mkdir -p "${fake_home}/.claude" "${fake_home}/.pen/claude"
+  mkdir -p "${fake_home}/.claude" "${fake_home}/.pen/container-shared/rw/claude"
   printf '%s\n' '{"theme":"dark"}' > "${fake_home}/.claude/settings.json"
-  printf '%s\n' '{"theme":"light"}' > "${fake_home}/.pen/claude/settings.json"
+  printf '%s\n' '{"theme":"light"}' > "${fake_home}/.pen/container-shared/rw/claude/settings.json"
   # Non-interactive (stdin from /dev/null, not a TTY): should show diff and exit non-zero
-  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/claude" run cmd_sync < /dev/null
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/container-shared/rw/claude" run cmd_sync < /dev/null
   [ "$status" -ne 0 ]
   [[ "$output" == *"--yes"* ]]
   # File should be unchanged
-  [[ "$(cat "${fake_home}/.pen/claude/settings.json")" == *"light"* ]]
+  [[ "$(cat "${fake_home}/.pen/container-shared/rw/claude/settings.json")" == *"light"* ]]
   rm -rf "$fake_home"
 }
 
 @test "cmd_sync: errors when source settings.json does not exist" {
   local fake_home
   fake_home=$(mktemp -d)
-  mkdir -p "${fake_home}/.pen/claude"
-  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/claude" run cmd_sync
+  mkdir -p "${fake_home}/.pen/container-shared/rw/claude"
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/container-shared/rw/claude" run cmd_sync
   [ "$status" -ne 0 ]
   [[ "$output" == *"No source settings"* ]]
   rm -rf "$fake_home"
@@ -507,8 +542,7 @@ EOF
   local fake_home; fake_home=$(mktemp -d)
   HARNESS=claude HOME="$fake_home" configure_harness
   [ "$HARNESS_IMAGE" = "pen-claude:latest" ]
-  [ "$HARNESS_CONFIG" = "${fake_home}/.pen/claude" ]
-  [ "$HARNESS_CONTAINER_CONFIG" = "/home/pen/.claude" ]
+  [ "$HARNESS_CONFIG" = "${fake_home}/.pen/container-shared/rw/claude" ]
   rm -rf "$fake_home"
 }
 
@@ -615,4 +649,208 @@ EOF
   [[ "$output" == pen_* ]]
   cd /tmp
   rm -rf "$tmpdir"
+}
+
+# ---------------------------------------------------------------------------
+# cmd_sync: guardrails hook management
+# ---------------------------------------------------------------------------
+
+@test "cmd_sync: writes pen-guardrails.sh to container-shared/ro/hooks" {
+  _require_jq
+  local fake_home
+  fake_home=$(mktemp -d)
+  mkdir -p "${fake_home}/.claude" "${fake_home}/.pen/container-shared/rw/claude"
+  printf '%s\n' '{"theme":"dark"}' > "${fake_home}/.claude/settings.json"
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/container-shared/rw/claude" run cmd_sync --yes
+  [ "$status" -eq 0 ]
+  [ -f "${fake_home}/.pen/container-shared/ro/hooks/pen-guardrails.sh" ]
+  rm -rf "$fake_home"
+}
+
+@test "cmd_sync: pen-guardrails.sh is executable" {
+  _require_jq
+  local fake_home
+  fake_home=$(mktemp -d)
+  mkdir -p "${fake_home}/.claude" "${fake_home}/.pen/container-shared/rw/claude"
+  printf '%s\n' '{"theme":"dark"}' > "${fake_home}/.claude/settings.json"
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/container-shared/rw/claude" run cmd_sync --yes
+  [ "$status" -eq 0 ]
+  [ -x "${fake_home}/.pen/container-shared/ro/hooks/pen-guardrails.sh" ]
+  rm -rf "$fake_home"
+}
+
+@test "cmd_sync: settings.json hook command uses mirrored host path" {
+  _require_jq
+  local fake_home
+  fake_home=$(mktemp -d)
+  mkdir -p "${fake_home}/.claude" "${fake_home}/.pen/container-shared/rw/claude"
+  printf '%s\n' '{"theme":"dark"}' > "${fake_home}/.claude/settings.json"
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/container-shared/rw/claude" run cmd_sync --yes
+  [ "$status" -eq 0 ]
+  local result
+  result=$(cat "${fake_home}/.pen/container-shared/rw/claude/settings.json")
+  [[ "$result" == *"container-shared/ro/hooks/pen-guardrails.sh"* ]]
+  rm -rf "$fake_home"
+}
+
+# Helper: run cmd_sync in a temp home and return path to generated hook script
+_sync_and_get_hook() {
+  local fake_home="$1"
+  mkdir -p "${fake_home}/.claude" "${fake_home}/.pen/container-shared/rw/claude"
+  printf '%s\n' '{"theme":"dark"}' > "${fake_home}/.claude/settings.json"
+  HOME="$fake_home" HARNESS_CONFIG="${fake_home}/.pen/container-shared/rw/claude" \
+    cmd_sync --yes >/dev/null 2>&1
+  echo "${fake_home}/.pen/container-shared/ro/hooks/pen-guardrails.sh"
+}
+
+@test "guardrails hook: blocks gh pr create" {
+  _require_jq
+  local fake_home hook tmpjson
+  fake_home=$(mktemp -d)
+  hook=$(_sync_and_get_hook "$fake_home")
+  tmpjson=$(mktemp)
+  printf '%s' '{"tool_name":"Bash","tool_input":{"command":"gh pr create --title \"fix thing\""}}' > "$tmpjson"
+  run bash -c "bash '$hook' < '$tmpjson'"
+  [ "$status" -ne 0 ]
+  rm -f "$tmpjson"
+  rm -rf "$fake_home"
+}
+
+@test "guardrails hook: blocks git push --force" {
+  _require_jq
+  local fake_home hook tmpjson
+  fake_home=$(mktemp -d)
+  hook=$(_sync_and_get_hook "$fake_home")
+  tmpjson=$(mktemp)
+  printf '%s' '{"tool_name":"Bash","tool_input":{"command":"git push origin feature-branch --force"}}' > "$tmpjson"
+  run bash -c "bash '$hook' < '$tmpjson'"
+  [ "$status" -ne 0 ]
+  rm -f "$tmpjson"
+  rm -rf "$fake_home"
+}
+
+@test "guardrails hook: blocks git push -f" {
+  _require_jq
+  local fake_home hook tmpjson
+  fake_home=$(mktemp -d)
+  hook=$(_sync_and_get_hook "$fake_home")
+  tmpjson=$(mktemp)
+  printf '%s' '{"tool_name":"Bash","tool_input":{"command":"git push -f origin feature-branch"}}' > "$tmpjson"
+  run bash -c "bash '$hook' < '$tmpjson'"
+  [ "$status" -ne 0 ]
+  rm -f "$tmpjson"
+  rm -rf "$fake_home"
+}
+
+@test "guardrails hook: blocks git push to main" {
+  _require_jq
+  local fake_home hook tmpjson
+  fake_home=$(mktemp -d)
+  hook=$(_sync_and_get_hook "$fake_home")
+  tmpjson=$(mktemp)
+  printf '%s' '{"tool_name":"Bash","tool_input":{"command":"git push origin main"}}' > "$tmpjson"
+  run bash -c "bash '$hook' < '$tmpjson'"
+  [ "$status" -ne 0 ]
+  rm -f "$tmpjson"
+  rm -rf "$fake_home"
+}
+
+@test "guardrails hook: blocks git push to master" {
+  _require_jq
+  local fake_home hook tmpjson
+  fake_home=$(mktemp -d)
+  hook=$(_sync_and_get_hook "$fake_home")
+  tmpjson=$(mktemp)
+  printf '%s' '{"tool_name":"Bash","tool_input":{"command":"git push origin master"}}' > "$tmpjson"
+  run bash -c "bash '$hook' < '$tmpjson'"
+  [ "$status" -ne 0 ]
+  rm -f "$tmpjson"
+  rm -rf "$fake_home"
+}
+
+@test "guardrails hook: allows git push to feature branch" {
+  _require_jq
+  local fake_home hook tmpjson
+  fake_home=$(mktemp -d)
+  hook=$(_sync_and_get_hook "$fake_home")
+  tmpjson=$(mktemp)
+  printf '%s' '{"tool_name":"Bash","tool_input":{"command":"git push origin feature/my-work"}}' > "$tmpjson"
+  run bash -c "bash '$hook' < '$tmpjson'"
+  [ "$status" -eq 0 ]
+  rm -f "$tmpjson"
+  rm -rf "$fake_home"
+}
+
+@test "guardrails hook: allows non-Bash tool calls" {
+  _require_jq
+  local fake_home hook tmpjson
+  fake_home=$(mktemp -d)
+  hook=$(_sync_and_get_hook "$fake_home")
+  tmpjson=$(mktemp)
+  printf '%s' '{"tool_name":"Read","tool_input":{"file_path":"/some/file"}}' > "$tmpjson"
+  run bash -c "bash '$hook' < '$tmpjson'"
+  [ "$status" -eq 0 ]
+  rm -f "$tmpjson"
+  rm -rf "$fake_home"
+}
+
+# ---------------------------------------------------------------------------
+# cmd_merge
+# ---------------------------------------------------------------------------
+
+@test "cmd_merge: merges worktree branch into main worktree" {
+  local fake_main fake_wt
+  fake_main=$(mktemp -d)
+  fake_wt=$(mktemp -d)
+  cat > "${MOCK_BIN}/git" << EOF
+#!/usr/bin/env bash
+case "\$*" in
+  "rev-parse --abbrev-ref HEAD")   echo "feature-branch" ;;
+  "rev-parse --show-toplevel")     echo "${fake_wt}" ;;
+  "worktree list")
+    printf '%s abc1234 [main]\n' "${fake_main}"
+    printf '%s def5678 [feature-branch]\n' "${fake_wt}" ;;
+  *"merge --no-ff feature-branch") echo "Merge made." ;;
+  *)                               exit 1 ;;
+esac
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  cd "$fake_wt"
+  run cmd_merge
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"feature-branch"* ]]
+  cd /tmp
+  rm -rf "$fake_main" "$fake_wt"
+}
+
+@test "cmd_merge: errors when run from main worktree" {
+  local fake_main
+  fake_main=$(mktemp -d)
+  cat > "${MOCK_BIN}/git" << EOF
+#!/usr/bin/env bash
+case "\$*" in
+  "rev-parse --abbrev-ref HEAD") echo "main" ;;
+  "rev-parse --show-toplevel")   echo "${fake_main}" ;;
+  "worktree list")               printf '%s abc1234 [main]\n' "${fake_main}" ;;
+  *)                             exit 1 ;;
+esac
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  cd "$fake_main"
+  run cmd_merge
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"main worktree"* ]]
+  cd /tmp
+  rm -rf "$fake_main"
+}
+
+@test "cmd_merge: errors when not in a git repo" {
+  cat > "${MOCK_BIN}/git" << 'EOF'
+#!/usr/bin/env bash
+exit 128
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  run cmd_merge
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"git repo"* ]]
 }
