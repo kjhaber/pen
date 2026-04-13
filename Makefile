@@ -18,7 +18,7 @@ build-base:
 build-claude: build-base
 	docker build -t $(IMAGE) docker/claude/
 
-build-cursor: build-base
+build-cursor:
 	docker build -t $(IMAGE_CURSOR) docker/cursor/
 
 test: test-script test-image

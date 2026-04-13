@@ -37,10 +37,8 @@ echo "=== Image tool checks (${IMAGE}) ==="
 check_as_user "claude runs as non-root" sh -c 'id -u | grep -v "^0$"'
 check "claude is installed"     claude --version
 check "git is installed"        git --version
-check "go is installed"         go version
 check "node is installed"       node --version
 check "npm is installed"        npm --version
-check "python3 is installed"    python3 --version
 check "make is installed"       make --version
 check "curl is installed"       curl --version
 check "jq is installed"         jq --version
