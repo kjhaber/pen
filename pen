@@ -6,7 +6,6 @@
 #   pen [--harness=<name>] exec [container]      open a shell in a running container
 #   pen [--harness=<name>] stop [container]      stop and remove a container
 #   pen [--harness=<name>] list [--names-only]   list all pen containers
-#   pen [--harness=<name>] merge                 merge current worktree branch into main worktree
 #   pen [--harness=<name>] sync-settings [--yes] sync host settings into pen config (claude only)
 #   pen [--harness=<name>] build                 build the project harness image
 #   pen init [--yes] [--force] [--image=<img>]   initialize pen for this project (wizard)
@@ -467,7 +466,7 @@ fi
 # Block: git push to protected branches (main, master, develop)
 if printf '%s' "$CMD" | grep -qE '^\s*git\s+push\b' \
   && printf '%s' "$CMD" | grep -qE '\b(main|master|develop)\b'; then
-  printf 'pen guardrail: pushing to main/master/develop is blocked. Use pen merge from the host.\n' >&2
+  printf 'pen guardrail: pushing to main/master/develop is blocked.\n' >&2
   exit 1
 fi
 
@@ -545,21 +544,6 @@ GUARDRAILS_EOF
   fi
 }
 
-cmd_merge() {
-  local branch current_root main_wt
-  if ! branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null); then
-    echo "error: not in a git repo" >&2
-    return 1
-  fi
-  current_root=$(git rev-parse --show-toplevel 2>/dev/null)
-  main_wt=$(main_worktree)
-  if [[ "$current_root" == "$main_wt" ]]; then
-    echo "error: run pen merge from a feature worktree, not the main worktree" >&2
-    return 1
-  fi
-  echo "Merging ${branch} into ${main_wt} ..." >&2
-  git -C "$main_wt" merge --no-ff "$branch"
-}
 
 cmd_exec() {
   local name
@@ -769,7 +753,6 @@ case "${passthrough_args[0]:-}" in
   exec)          cmd_exec "${passthrough_args[1]:-}" ;;
   stop)          cmd_stop "${passthrough_args[1]:-}" ;;
   list)          cmd_list "${passthrough_args[1]:-}" ;;
-  merge)         cmd_merge ;;
   sync-settings) cmd_sync "${passthrough_args[@]:1}" ;;
   init)          cmd_init "${passthrough_args[@]:1}" ;;
   build)         cmd_build "${passthrough_args[@]:1}" ;;

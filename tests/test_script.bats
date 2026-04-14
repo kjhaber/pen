@@ -828,67 +828,6 @@ _sync_and_get_hook() {
 }
 
 # ---------------------------------------------------------------------------
-# cmd_merge
-# ---------------------------------------------------------------------------
-
-@test "cmd_merge: merges worktree branch into main worktree" {
-  local fake_main fake_wt
-  fake_main=$(mktemp -d)
-  fake_wt=$(mktemp -d)
-  cat > "${MOCK_BIN}/git" << EOF
-#!/usr/bin/env bash
-case "\$*" in
-  "rev-parse --abbrev-ref HEAD")   echo "feature-branch" ;;
-  "rev-parse --show-toplevel")     echo "${fake_wt}" ;;
-  "worktree list")
-    printf '%s abc1234 [main]\n' "${fake_main}"
-    printf '%s def5678 [feature-branch]\n' "${fake_wt}" ;;
-  *"merge --no-ff feature-branch") echo "Merge made." ;;
-  *)                               exit 1 ;;
-esac
-EOF
-  chmod +x "${MOCK_BIN}/git"
-  cd "$fake_wt"
-  run cmd_merge
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"feature-branch"* ]]
-  cd /tmp
-  rm -rf "$fake_main" "$fake_wt"
-}
-
-@test "cmd_merge: errors when run from main worktree" {
-  local fake_main
-  fake_main=$(mktemp -d)
-  cat > "${MOCK_BIN}/git" << EOF
-#!/usr/bin/env bash
-case "\$*" in
-  "rev-parse --abbrev-ref HEAD") echo "main" ;;
-  "rev-parse --show-toplevel")   echo "${fake_main}" ;;
-  "worktree list")               printf '%s abc1234 [main]\n' "${fake_main}" ;;
-  *)                             exit 1 ;;
-esac
-EOF
-  chmod +x "${MOCK_BIN}/git"
-  cd "$fake_main"
-  run cmd_merge
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"main worktree"* ]]
-  cd /tmp
-  rm -rf "$fake_main"
-}
-
-@test "cmd_merge: errors when not in a git repo" {
-  cat > "${MOCK_BIN}/git" << 'EOF'
-#!/usr/bin/env bash
-exit 128
-EOF
-  chmod +x "${MOCK_BIN}/git"
-  run cmd_merge
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"git repo"* ]]
-}
-
-# ---------------------------------------------------------------------------
 # _resolve_image
 # ---------------------------------------------------------------------------
 

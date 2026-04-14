@@ -10,7 +10,7 @@ _pen() {
 
   # Complete subcommands at position 1
   if [[ $COMP_CWORD -eq 1 ]]; then
-    COMPREPLY=( $(compgen -W "exec stop list merge sync-settings init build" -- "$cur") )
+    COMPREPLY=( $(compgen -W "exec stop list sync-settings init build" -- "$cur") )
     return
   fi
 
