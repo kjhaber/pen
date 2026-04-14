@@ -2,21 +2,29 @@
 # pen — run a coding harness inside an isolated Docker container
 #
 # Usage:
-#   pen [--harness=<name>]                      start container (if needed) and launch harness
-#   pen [--harness=<name>] exec [container]     open a shell in a running container
-#   pen [--harness=<name>] stop [container]     stop and remove a container
-#   pen [--harness=<name>] list [--names-only]  list all pen containers
-#   pen [--harness=<name>] merge                  merge current worktree branch into main worktree
-#   pen [--harness=<name>] sync-settings [--yes]  sync host settings into pen config (claude only)
-#   pen -- <args>                               pass args directly to harness (bypass pen flag parsing)
-#   pen --help | -h                             show this help text
-#   pen --version | -V                          show pen version
+#   pen [--harness=<name>]                       start container (if needed) and launch harness
+#   pen [--harness=<name>] exec [container]      open a shell in a running container
+#   pen [--harness=<name>] stop [container]      stop and remove a container
+#   pen [--harness=<name>] list [--names-only]   list all pen containers
+#   pen [--harness=<name>] merge                 merge current worktree branch into main worktree
+#   pen [--harness=<name>] sync-settings [--yes] sync host settings into pen config (claude only)
+#   pen [--harness=<name>] build                 build the project harness image
+#   pen init [--yes] [--force] [--image=<img>]   initialize pen for this project (wizard)
+#   pen -- <args>                                pass args directly to harness (bypass pen flag parsing)
+#   pen --help | -h                              show this help text
+#   pen --version | -V                           show pen version
 #
 # Harness selection (highest to lowest priority):
-#   --harness=<name>           CLI flag
-#   .pen.toml (git root)       harness = "name"
-#   ~/.pen/config.toml         harness = "name"
+#   --harness=<name>                    CLI flag
+#   .pen.toml (main worktree)           harness = "name"
+#   ~/.pen/config.toml                  harness = "name"
 #   default: claude
+#
+# Image selection (highest to lowest priority):
+#   PEN_IMAGE env var
+#   .pen.toml (main worktree)           image = "registry/image:tag"
+#   ~/.pen/config.toml                  image = "registry/image:tag"
+#   default: pen-<harness>:latest
 
 PEN_VERSION="%%VERSION%%"
 
@@ -38,9 +46,9 @@ resolve_harness() {
   # 1. CLI flag
   [[ -n "${CLI_HARNESS:-}" ]] && { echo "$CLI_HARNESS"; return; }
 
-  # 2. .pen.toml in git root
+  # 2. .pen.toml in main worktree (applies from any linked worktree too)
   local root
-  root=$(git rev-parse --show-toplevel 2>/dev/null)
+  root=$(main_worktree 2>/dev/null || true)
   if [[ -n "$root" && -f "$root/.pen.toml" ]]; then
     local h; h=$(_read_toml_str "$root/.pen.toml" harness)
     [[ -n "$h" ]] && { echo "$h"; return; }
@@ -57,6 +65,28 @@ resolve_harness() {
 }
 
 # ---------------------------------------------------------------------------
+# Image resolution
+# ---------------------------------------------------------------------------
+
+_resolve_image() {
+  local default="$1"
+
+  local root
+  root=$(main_worktree 2>/dev/null || true)
+  if [[ -n "$root" && -f "${root}/.pen.toml" ]]; then
+    local img; img=$(_read_toml_str "${root}/.pen.toml" image)
+    [[ -n "$img" ]] && { echo "$img"; return; }
+  fi
+
+  if [[ -f "${HOME}/.pen/config.toml" ]]; then
+    local img; img=$(_read_toml_str "${HOME}/.pen/config.toml" image)
+    [[ -n "$img" ]] && { echo "$img"; return; }
+  fi
+
+  echo "$default"
+}
+
+# ---------------------------------------------------------------------------
 # Harness configuration — sets globals used by all commands
 # ---------------------------------------------------------------------------
 
@@ -66,11 +96,11 @@ resolve_harness() {
 configure_harness() {
   case "${HARNESS:-}" in
     claude)
-      HARNESS_IMAGE="${PEN_IMAGE:-pen-claude:latest}"
+      HARNESS_IMAGE="${PEN_IMAGE:-$(_resolve_image "pen-claude:latest")}"
       HARNESS_CONFIG="${HOME}/.pen/container-shared/rw/claude"
       ;;
     cursor)
-      HARNESS_IMAGE="${PEN_IMAGE:-pen-cursor:latest}"
+      HARNESS_IMAGE="${PEN_IMAGE:-$(_resolve_image "pen-cursor:latest")}"
       HARNESS_CONFIG="${HOME}/.pen/container-shared/rw/cursor"
       ;;
     opencode)
@@ -80,6 +110,56 @@ configure_harness() {
     *)
       echo "error: unknown harness '${HARNESS:-}'. Known harnesses: claude, cursor" >&2
       exit 1
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# Project init helpers
+# ---------------------------------------------------------------------------
+
+# Detect language runtimes from project files; echoes space-separated apk package names
+_detect_stack() {
+  local root="$1"
+  local pkgs=()
+  [[ -f "${root}/go.mod" || -f "${root}/go.sum" ]] \
+    && pkgs+=(go)
+  [[ -f "${root}/requirements.txt" || -f "${root}/setup.py" \
+     || -f "${root}/pyproject.toml" || -f "${root}/Pipfile" ]] \
+    && pkgs+=(python3)
+  [[ -f "${root}/pom.xml" || -f "${root}/build.gradle" \
+     || -f "${root}/build.gradle.kts" ]] \
+    && pkgs+=(openjdk21)
+  [[ -f "${root}/Gemfile" ]] \
+    && pkgs+=(ruby)
+  [[ -f "${root}/Cargo.toml" ]] \
+    && pkgs+=(rust cargo)
+  echo "${pkgs[*]}"
+}
+
+# Write a project Dockerfile to stdout
+_gen_project_dockerfile() {
+  local harness="$1" base_image="$2" packages="$3"
+
+  local from_image="${base_image}"
+  if [[ -z "$from_image" ]]; then
+    case "$harness" in
+      cursor) from_image="pen-cursor:latest" ;;
+      *)      from_image="pen-claude:latest" ;;
+    esac
+  fi
+
+  printf 'FROM %s\n' "$from_image"
+
+  [[ -z "$packages" ]] && return
+
+  case "$harness" in
+    cursor)
+      printf '\nRUN apt-get update && apt-get install -y --no-install-recommends %s \\\n' "$packages"
+      printf '    && rm -rf /var/lib/apt/lists/*\n'
+      ;;
+    *)
+      printf '\nRUN apk add --no-cache %s\n' "$packages"
       ;;
   esac
 }
@@ -535,6 +615,113 @@ cmd_list() {
     --format "table {{.Names}}\t{{.Label \"pen.harness\"}}\t{{.Label \"pen.worktree\"}}\t{{.Status}}"
 }
 
+cmd_init() {
+  local yes=false force=false image=""
+  for arg in "$@"; do
+    case "$arg" in
+      --yes|-y)   yes=true ;;
+      --force)    force=true ;;
+      --image=*)  image="${arg#--image=}" ;;
+    esac
+  done
+
+  local main_wt
+  main_wt=$(main_worktree 2>/dev/null || true)
+  if [[ -z "$main_wt" ]]; then
+    echo "error: not in a git repository" >&2
+    return 1
+  fi
+
+  local toml_file="${main_wt}/.pen.toml"
+  local pen_dir="${main_wt}/.pen"
+
+  if [[ -f "$toml_file" ]] && ! $force; then
+    if $yes; then
+      echo "pen init: .pen.toml already exists; use --force to overwrite" >&2
+      return 0
+    fi
+    printf '.pen.toml already exists. Overwrite? [y/N] '
+    local r; read -r r
+    [[ "$r" =~ ^[Yy]$ ]] || { echo "Aborted." >&2; return 1; }
+  fi
+
+  # ---- [1/3] Harness ----
+  local harness="${HARNESS:-claude}"
+  if ! $yes; then
+    printf '\n[1/3] Default harness\n'
+    printf '  [1] claude (Claude Code CLI)  [2] cursor (Cursor Agent)\n'
+    printf '  Choice [1]: '
+    local r; read -r r
+    [[ "$r" == "2" ]] && harness="cursor"
+  fi
+
+  # ---- [2/3] Docker image ----
+  if ! $yes && [[ -z "$image" ]]; then
+    printf '\n[2/3] Docker image\n'
+    printf '  Default: pen-%s:latest (built locally via pen build)\n' "$harness"
+    printf '  Company/custom registry image (leave blank for default): '
+    read -r image
+  fi
+
+  # ---- [3/3] Additional packages ----
+  local detected; detected=$(_detect_stack "$main_wt")
+  local packages="$detected"
+  if ! $yes; then
+    printf '\n[3/3] Additional packages\n'
+    if [[ -n "$detected" ]]; then
+      printf '  Detected from project: %s\n' "$detected"
+    else
+      printf '  None auto-detected\n'
+    fi
+    printf '  Extra packages to add (space-separated, e.g. github-cli kubectl): '
+    local extra; read -r extra
+    [[ -n "$extra" ]] && packages="${packages:+$packages }${extra}"
+  fi
+
+  # Write .pen.toml
+  {
+    printf 'harness = "%s"\n' "$harness"
+    [[ -n "$image" ]] && printf 'image = "%s"\n' "$image"
+  } > "$toml_file"
+  printf 'Wrote %s\n' "$toml_file" >&2
+
+  # Write project Dockerfile only when packages are needed
+  if [[ -n "$packages" ]]; then
+    mkdir -p "$pen_dir"
+    local dockerfile="${pen_dir}/Dockerfile.${harness}"
+    _gen_project_dockerfile "$harness" "$image" "$packages" > "$dockerfile"
+    printf 'Wrote %s\n' "$dockerfile" >&2
+    printf '\nRun '"'"'pen build'"'"' to build the project image.\n' >&2
+  else
+    printf '\nNo extra packages — using default pen-%s:latest.\n' "$harness" >&2
+  fi
+}
+
+cmd_build() {
+  local main_wt
+  main_wt=$(main_worktree 2>/dev/null || true)
+  if [[ -z "$main_wt" ]]; then
+    echo "error: not in a git repository" >&2
+    return 1
+  fi
+
+  # Resolve project Dockerfile from main worktree
+  local dockerfile=""
+  [[ -f "${main_wt}/.pen/Dockerfile.${HARNESS}" ]] \
+    && dockerfile="${main_wt}/.pen/Dockerfile.${HARNESS}"
+  [[ -z "$dockerfile" && -f "${main_wt}/.pen/Dockerfile" ]] \
+    && dockerfile="${main_wt}/.pen/Dockerfile"
+
+  if [[ -z "$dockerfile" ]]; then
+    echo "error: no project Dockerfile found at ${main_wt}/.pen/Dockerfile.${HARNESS}" >&2
+    echo "Run 'pen init' to create one." >&2
+    return 1
+  fi
+
+  echo "Building ${HARNESS} image: ${HARNESS_IMAGE}" >&2
+  docker build -t "$HARNESS_IMAGE" "$(dirname "$dockerfile")"
+}
+
 cmd_help() {
   sed -n '2,/^PEN_VERSION/s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"
 }
@@ -584,5 +771,7 @@ case "${passthrough_args[0]:-}" in
   list)          cmd_list "${passthrough_args[1]:-}" ;;
   merge)         cmd_merge ;;
   sync-settings) cmd_sync "${passthrough_args[@]:1}" ;;
+  init)          cmd_init "${passthrough_args[@]:1}" ;;
+  build)         cmd_build "${passthrough_args[@]:1}" ;;
   *)             cmd_launch "${passthrough_args[@]}" ;;
 esac

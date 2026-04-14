@@ -887,3 +887,311 @@ EOF
   [ "$status" -ne 0 ]
   [[ "$output" == *"git repo"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# _resolve_image
+# ---------------------------------------------------------------------------
+
+@test "_resolve_image: returns default when no config and no git" {
+  cat > "${MOCK_BIN}/git" << 'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  local fake_home; fake_home=$(mktemp -d)
+  HOME="$fake_home" run _resolve_image "pen-claude:latest"
+  [ "$status" -eq 0 ]
+  [ "$output" = "pen-claude:latest" ]
+  rm -rf "$fake_home"
+}
+
+@test "_resolve_image: reads image from .pen.toml in main worktree" {
+  local main_wt; main_wt=$(mktemp -d)
+  printf 'image = "registry.example.com/pen-claude:latest"\n' > "${main_wt}/.pen.toml"
+  cat > "${MOCK_BIN}/git" << EOF
+#!/usr/bin/env bash
+printf '%s abc1234 [main]\n' "$main_wt"
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  local fake_home; fake_home=$(mktemp -d)
+  HOME="$fake_home" run _resolve_image "pen-claude:latest"
+  [ "$status" -eq 0 ]
+  [ "$output" = "registry.example.com/pen-claude:latest" ]
+  rm -rf "$main_wt" "$fake_home"
+}
+
+@test "_resolve_image: reads image from ~/.pen/config.toml" {
+  cat > "${MOCK_BIN}/git" << 'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  local fake_home; fake_home=$(mktemp -d)
+  mkdir -p "${fake_home}/.pen"
+  printf 'image = "registry.example.com/pen-claude:v2"\n' > "${fake_home}/.pen/config.toml"
+  HOME="$fake_home" run _resolve_image "pen-claude:latest"
+  [ "$status" -eq 0 ]
+  [ "$output" = "registry.example.com/pen-claude:v2" ]
+  rm -rf "$fake_home"
+}
+
+@test "_resolve_image: .pen.toml takes precedence over config.toml" {
+  local main_wt; main_wt=$(mktemp -d)
+  printf 'image = "project-image:latest"\n' > "${main_wt}/.pen.toml"
+  cat > "${MOCK_BIN}/git" << EOF
+#!/usr/bin/env bash
+printf '%s abc1234 [main]\n' "$main_wt"
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  local fake_home; fake_home=$(mktemp -d)
+  mkdir -p "${fake_home}/.pen"
+  printf 'image = "user-image:latest"\n' > "${fake_home}/.pen/config.toml"
+  HOME="$fake_home" run _resolve_image "pen-claude:latest"
+  [ "$status" -eq 0 ]
+  [ "$output" = "project-image:latest" ]
+  rm -rf "$main_wt" "$fake_home"
+}
+
+# ---------------------------------------------------------------------------
+# resolve_harness — main worktree
+# ---------------------------------------------------------------------------
+
+@test "resolve_harness: reads harness from main worktree when in linked worktree" {
+  local main_wt; main_wt=$(mktemp -d)
+  local linked_wt; linked_wt=$(mktemp -d)
+  printf 'harness = "cursor"\n' > "${main_wt}/.pen.toml"
+  cat > "${MOCK_BIN}/git" << EOF
+#!/usr/bin/env bash
+printf '%s abc1234 [main]\n' "$main_wt"
+printf '%s def5678 [feature]\n' "$linked_wt"
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  local fake_home; fake_home=$(mktemp -d)
+  CLI_HARNESS="" HOME="$fake_home" run resolve_harness
+  [ "$status" -eq 0 ]
+  [ "$output" = "cursor" ]
+  rm -rf "$main_wt" "$linked_wt" "$fake_home"
+}
+
+# ---------------------------------------------------------------------------
+# configure_harness — image resolution via config
+# ---------------------------------------------------------------------------
+
+@test "configure_harness: reads image from ~/.pen/config.toml" {
+  cat > "${MOCK_BIN}/git" << 'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  local fake_home; fake_home=$(mktemp -d)
+  mkdir -p "${fake_home}/.pen"
+  printf 'image = "registry.example.com/pen-claude:prod"\n' > "${fake_home}/.pen/config.toml"
+  HARNESS=claude HOME="$fake_home" configure_harness
+  [ "$HARNESS_IMAGE" = "registry.example.com/pen-claude:prod" ]
+  rm -rf "$fake_home"
+}
+
+@test "configure_harness: PEN_IMAGE takes precedence over config.toml image" {
+  cat > "${MOCK_BIN}/git" << 'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  local fake_home; fake_home=$(mktemp -d)
+  mkdir -p "${fake_home}/.pen"
+  printf 'image = "registry.example.com/pen-claude:prod"\n' > "${fake_home}/.pen/config.toml"
+  HARNESS=claude HOME="$fake_home" PEN_IMAGE="override:v1" configure_harness
+  [ "$HARNESS_IMAGE" = "override:v1" ]
+  rm -rf "$fake_home"
+}
+
+# ---------------------------------------------------------------------------
+# _detect_stack
+# ---------------------------------------------------------------------------
+
+@test "_detect_stack: returns go when go.mod exists" {
+  local tmpdir; tmpdir=$(mktemp -d)
+  touch "${tmpdir}/go.mod"
+  run _detect_stack "$tmpdir"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"go"* ]]
+  rm -rf "$tmpdir"
+}
+
+@test "_detect_stack: returns python3 when requirements.txt exists" {
+  local tmpdir; tmpdir=$(mktemp -d)
+  touch "${tmpdir}/requirements.txt"
+  run _detect_stack "$tmpdir"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"python3"* ]]
+  rm -rf "$tmpdir"
+}
+
+@test "_detect_stack: returns multiple languages when both detected" {
+  local tmpdir; tmpdir=$(mktemp -d)
+  touch "${tmpdir}/go.mod" "${tmpdir}/requirements.txt"
+  run _detect_stack "$tmpdir"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"go"* ]]
+  [[ "$output" == *"python3"* ]]
+  rm -rf "$tmpdir"
+}
+
+@test "_detect_stack: returns empty when no known files" {
+  local tmpdir; tmpdir=$(mktemp -d)
+  run _detect_stack "$tmpdir"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  rm -rf "$tmpdir"
+}
+
+# ---------------------------------------------------------------------------
+# cmd_init
+# ---------------------------------------------------------------------------
+
+@test "cmd_init: creates .pen.toml with default harness (--yes)" {
+  local main_wt; main_wt=$(mktemp -d)
+  cat > "${MOCK_BIN}/git" << EOF
+#!/usr/bin/env bash
+printf '%s abc1234 [main]\n' "$main_wt"
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  run cmd_init --yes
+  [ "$status" -eq 0 ]
+  [ -f "${main_wt}/.pen.toml" ]
+  grep -q 'harness = "claude"' "${main_wt}/.pen.toml"
+  rm -rf "$main_wt"
+}
+
+@test "cmd_init: no Dockerfile when no packages detected (--yes)" {
+  local main_wt; main_wt=$(mktemp -d)
+  cat > "${MOCK_BIN}/git" << EOF
+#!/usr/bin/env bash
+printf '%s abc1234 [main]\n' "$main_wt"
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  run cmd_init --yes
+  [ "$status" -eq 0 ]
+  [ ! -f "${main_wt}/.pen/Dockerfile.claude" ]
+  rm -rf "$main_wt"
+}
+
+@test "cmd_init: creates Dockerfile when stack detected (--yes)" {
+  local main_wt; main_wt=$(mktemp -d)
+  touch "${main_wt}/go.mod"
+  cat > "${MOCK_BIN}/git" << EOF
+#!/usr/bin/env bash
+printf '%s abc1234 [main]\n' "$main_wt"
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  run cmd_init --yes
+  [ "$status" -eq 0 ]
+  [ -f "${main_wt}/.pen/Dockerfile.claude" ]
+  grep -q 'go' "${main_wt}/.pen/Dockerfile.claude"
+  rm -rf "$main_wt"
+}
+
+@test "cmd_init: writes image to .pen.toml when --image provided" {
+  local main_wt; main_wt=$(mktemp -d)
+  cat > "${MOCK_BIN}/git" << EOF
+#!/usr/bin/env bash
+printf '%s abc1234 [main]\n' "$main_wt"
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  run cmd_init --yes --image="registry.company.com/pen-claude:latest"
+  [ "$status" -eq 0 ]
+  grep -q 'image = "registry.company.com/pen-claude:latest"' "${main_wt}/.pen.toml"
+  rm -rf "$main_wt"
+}
+
+@test "cmd_init: is no-op when .pen.toml exists without --force (--yes)" {
+  local main_wt; main_wt=$(mktemp -d)
+  printf 'harness = "cursor"\n' > "${main_wt}/.pen.toml"
+  cat > "${MOCK_BIN}/git" << EOF
+#!/usr/bin/env bash
+printf '%s abc1234 [main]\n' "$main_wt"
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  run cmd_init --yes
+  [ "$status" -eq 0 ]
+  grep -q 'harness = "cursor"' "${main_wt}/.pen.toml"
+  rm -rf "$main_wt"
+}
+
+@test "cmd_init --force: overwrites existing .pen.toml" {
+  local main_wt; main_wt=$(mktemp -d)
+  printf 'harness = "cursor"\n' > "${main_wt}/.pen.toml"
+  cat > "${MOCK_BIN}/git" << EOF
+#!/usr/bin/env bash
+printf '%s abc1234 [main]\n' "$main_wt"
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  run cmd_init --yes --force
+  [ "$status" -eq 0 ]
+  grep -q 'harness = "claude"' "${main_wt}/.pen.toml"
+  rm -rf "$main_wt"
+}
+
+@test "cmd_init: errors when not in a git repo" {
+  cat > "${MOCK_BIN}/git" << 'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  run cmd_init --yes
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"git"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# cmd_build
+# ---------------------------------------------------------------------------
+
+@test "cmd_build: finds Dockerfile in main worktree and builds" {
+  local main_wt; main_wt=$(mktemp -d)
+  mkdir -p "${main_wt}/.pen"
+  printf 'FROM pen-claude:latest\n' > "${main_wt}/.pen/Dockerfile.claude"
+  cat > "${MOCK_BIN}/git" << EOF
+#!/usr/bin/env bash
+printf '%s abc1234 [main]\n' "$main_wt"
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  cat > "${MOCK_BIN}/docker" << EOF
+#!/usr/bin/env bash
+echo "docker \$@" >> "${MOCK_BIN}/.docker_log"
+EOF
+  chmod +x "${MOCK_BIN}/docker"
+  HARNESS_IMAGE="pen-claude:latest" run cmd_build
+  [ "$status" -eq 0 ]
+  [[ "$(cat "${MOCK_BIN}/.docker_log")" == *"pen-claude:latest"* ]]
+  rm -rf "$main_wt"
+}
+
+@test "cmd_build: errors when no Dockerfile found" {
+  local main_wt; main_wt=$(mktemp -d)
+  cat > "${MOCK_BIN}/git" << EOF
+#!/usr/bin/env bash
+printf '%s abc1234 [main]\n' "$main_wt"
+EOF
+  chmod +x "${MOCK_BIN}/git"
+  HARNESS_IMAGE="pen-claude:latest" run cmd_build
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"pen init"* ]]
+  rm -rf "$main_wt"
+}
+
+# ---------------------------------------------------------------------------
+# cmd_help — new commands documented
+# ---------------------------------------------------------------------------
+
+@test "cmd_help: documents init command" {
+  run cmd_help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"init"* ]]
+}
+
+@test "cmd_help: documents build command" {
+  run cmd_help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"build"* ]]
+}

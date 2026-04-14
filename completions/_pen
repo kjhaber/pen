@@ -17,7 +17,10 @@ _pen() {
         'exec:open a shell in a running container'
         'stop:stop and remove a container'
         'list:list all pen containers'
+        'merge:merge current worktree branch into main worktree'
         'sync-settings:sync host settings.json into ~/.pen/claude/ (preserves pen hooks/mcpServers; claude harness only)'
+        'init:initialize pen for this project (interactive wizard)'
+        'build:build the project harness image'
       )
       _describe 'command' commands
       ;;
